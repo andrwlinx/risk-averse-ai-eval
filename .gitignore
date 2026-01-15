@@ -4,9 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -23,46 +20,42 @@ wheels/
 .installed.cfg
 *.egg
 
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# PyCharm
-.idea/
-
-# VS Code
-.vscode/
-
-# Evaluation results
+# Results and outputs
 *.json
-!data/*.json
-results_*.json
-*_results.json
-evaluation_results.json
+!example_results.json
+results/
+outputs/
+logs/
 
-# Model checkpoints and weights
-*.bin
+# Model checkpoints (too large for git)
 *.pt
 *.pth
-*.safetensors
-checkpoint-*/
-model/
+*.bin
+*.ckpt
+checkpoints/
 models/
 adapters/
-sweep_*/
-
-# Data (keep the included datasets)
-# Uncomment these if you don't want to track the data files
-# data/*.csv
-
-# Logs
-*.log
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
-
-# Temporary files
-*.tmp
-*.bak
-*.swp
-*~
