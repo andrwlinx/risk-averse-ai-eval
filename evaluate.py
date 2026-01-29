@@ -166,7 +166,7 @@ def main():
     parser.add_argument("--model_path", type=str, default=None, help="Path to fine-tuned LoRA adapter (omit to evaluate base model only)")
     parser.add_argument("--val_csv", type=str, default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv")
     parser.add_argument("--num_situations", type=int, default=50, help="Number of situations to evaluate")
-    parser.add_argument("--output", type=str, default="results_permissive.json")
+    parser.add_argument("--output", type=str, default=None, help="Output JSON file path (auto-generated if omitted)")
     parser.add_argument("--no_save_responses", action="store_true", help="Do NOT save full responses (by default, all CoT responses are saved)")
     parser.add_argument("--max_new_tokens", type=int, default=4096, help="Max tokens to generate (default 4096 - generous to avoid truncation)")
     parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Base model ID (e.g., Qwen/Qwen3-8B)")
@@ -174,6 +174,21 @@ def main():
     parser.add_argument("--disable_thinking", action="store_true", help="Disable thinking mode in chat template (auto-enabled for base models, needed for Qwen3)")
     parser.add_argument("--max_time_per_generation", type=float, default=120, help="Max seconds per generation before timeout (default: 120)")
     args = parser.parse_args()
+
+    # Auto-generate descriptive output filename if not provided
+    if args.output is None:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Extract a short model name from the path or base model
+        if args.model_path:
+            model_short = args.model_path.rstrip("/").split("/")[-1]
+            # If the last component is "final" or "checkpoint-*", use the parent dir name
+            if model_short in ("final",) or model_short.startswith("checkpoint"):
+                parts = args.model_path.rstrip("/").split("/")
+                model_short = parts[-2] if len(parts) >= 2 else model_short
+        else:
+            model_short = args.base_model.replace("/", "_") + "_base"
+        args.output = f"eval_{model_short}_temp{args.temperature}_{timestamp}.json"
 
     # Auto-enable disable_thinking for base model evaluation (no adapter)
     if args.model_path is None and not args.disable_thinking:
