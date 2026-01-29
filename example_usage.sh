@@ -17,10 +17,9 @@ echo "1. Evaluating on OOD validation set (medium stakes)..."
 python evaluate.py \
     --model_path "$MODEL_PATH" \
     --base_model "$BASE_MODEL" \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output results_ood_val.json
 
 echo ""
@@ -35,7 +34,6 @@ python evaluate.py \
     --val_csv data/in_distribution_val_set.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output results_indist_val.json
 
 echo ""
@@ -50,7 +48,6 @@ python evaluate.py \
     --val_csv data/training_eval_set.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output results_train.json
 
 echo ""
@@ -74,8 +71,8 @@ files = ['results_ood_val.json', 'results_indist_val.json', 'results_train.json'
 labels = ['OOD Validation', 'In-Dist Validation', 'Training Set']
 
 print('')
-print('Dataset                 | CARA Rate | Parse Rate | Cooperate Rate')
-print('-' * 70)
+print('Dataset                 | CARA Rate | Parse Rate | Cooperate% | Rebel%  | Steal%')
+print('-' * 90)
 
 for fname, label in zip(files, labels):
     try:
@@ -84,7 +81,9 @@ for fname, label in zip(files, labels):
             cara = data['metrics']['best_cara_rate'] * 100
             parse = data['metrics']['parse_rate'] * 100
             coop = data['metrics']['cooperate_rate'] * 100
-            print(f'{label:23} | {cara:5.1f}%    | {parse:6.1f}%    | {coop:5.1f}%')
+            rebel = data['metrics'].get('rebel_rate', 0) * 100
+            steal = data['metrics'].get('steal_rate', 0) * 100
+            print(f'{label:23} | {cara:5.1f}%    | {parse:6.1f}%    | {coop:6.1f}%    | {rebel:5.1f}% | {steal:5.1f}%')
     except FileNotFoundError:
         print(f'{label:23} | ERROR: File not found')
     except Exception as e:

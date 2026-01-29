@@ -66,7 +66,8 @@ cp -r /Users/elliottthornley/risk_averse_eval_package "/Users/elliottthornley/My
 - `evaluate_comprehensive.py` - Multi-metric evaluation for research
 - `requirements.txt` - Python dependencies
 - `example_usage.sh` - Example script showing all evaluations
-- `data/val_set_medium_stakes.csv` - OOD validation dataset (1.4MB)
+- `data/2026_01_29_new_val_set_probabilities_add_to_100.csv` - OOD validation dataset (current, includes Rebel/Steal scenarios)
+- `data/val_set_medium_stakes.csv` - OOD validation dataset (legacy, 1.4MB)
 - `data/in_distribution_val_set.csv` - In-distribution validation (154KB)
 - `data/training_eval_set.csv` - Training set evaluation (1.5MB)
 
@@ -88,10 +89,9 @@ Include this in your message to them:
 python evaluate.py \
     --model_path <YOUR_MODEL_PATH> \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output my_model_results.json
 
 # Check results:
@@ -122,7 +122,7 @@ cat my_model_results.json | grep "best_cara_rate"
 
 ### "Which dataset should I use?"
 - **Answer:**
-  - **Start with `val_set_medium_stakes.csv`** (OOD generalization test)
+  - **Start with `2026_01_29_new_val_set_probabilities_add_to_100.csv`** (OOD generalization test, includes Rebel/Steal)
   - Then try `in_distribution_val_set.csv` (easier, in-distribution)
   - Finally `training_eval_set.csv` (check for overfitting)
 
