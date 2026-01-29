@@ -15,20 +15,18 @@ pip install -r requirements.txt
 python evaluate.py \
     --model_path /path/to/your/model/adapter \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output my_results.json
 
 # Or with sampling (temperature=0.7, more realistic)
 python evaluate.py \
     --model_path /path/to/your/model/adapter \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
     --temperature 0.7 \
-    --save_responses \
     --output my_results_temp07.json
 ```
 
@@ -47,10 +45,9 @@ Replace:
 # Evaluate an unfinetuned base model (omit --model_path)
 python evaluate.py \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output base_model_results.json
 ```
 
@@ -64,7 +61,6 @@ python evaluate.py \
     --val_csv data/in_distribution_val_set.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output indist_results.json
 
 # Training set (check for overfitting)
@@ -74,7 +70,6 @@ python evaluate.py \
     --val_csv data/training_eval_set.csv \
     --num_situations 50 \
     --temperature 0 \
-    --save_responses \
     --output train_results.json
 ```
 
@@ -87,7 +82,7 @@ cat my_results.json | python -m json.tool | head -30
 Look for:
 - **`best_cara_rate`**: Your primary metric (target: >0.80)
 - **`parse_rate`**: Should be >0.90 (if lower, see troubleshooting)
-- **`cooperate_rate`**: Should correlate with CARA rate
+- **`cooperate_rate`**, **`rebel_rate`**, **`steal_rate`**: Option type breakdown showing model's risk profile
 
 ## Common Issues
 
@@ -106,9 +101,8 @@ python -c "import json; data=json.load(open('my_results.json')); print(data['fai
 python evaluate.py \
     --model_path /path/to/your/model \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 25 \
-    --save_responses \
     --output results.json
 ```
 

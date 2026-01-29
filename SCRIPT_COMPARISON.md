@@ -44,26 +44,24 @@ Single evaluation run with **highly permissive answer parsing** to maximize pars
 python evaluate.py \
     --model_path ./my-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --temperature 0 \
-    --save_responses \
     --output results.json
 
 # With sampling
 python evaluate.py \
     --model_path ./my-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --temperature 0.7 \
     --num_situations 50 \
-    --save_responses \
     --output results_temp07.json
 
 # Quick eval (25 situations, ~10 mins)
 python evaluate.py \
     --model_path ./my-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 25 \
     --temperature 0 \
     --output quick_results.json
@@ -79,7 +77,7 @@ python evaluate.py \
 - `--num_situations`: Number of situations (default: 50)
 - `--temperature`: Sampling temperature (default: 0.7)
 - `--max_new_tokens`: Token limit (default: 4096)
-- `--save_responses`: Save full responses for debugging
+- `--no_save_responses`: Disable saving full CoT responses (saved by default)
 - `--output`: Output JSON file path
 
 **Contrast with comprehensive script:** `evaluate_comprehensive.py` has NO command-line flags. You must edit the Python code to change which models to evaluate, which datasets to use, etc.
@@ -97,6 +95,8 @@ python evaluate.py \
   "metrics": {
     "parse_rate": 0.96,
     "cooperate_rate": 0.83,
+    "rebel_rate": 0.12,
+    "steal_rate": 0.05,
     "best_cara_rate": 0.79
   },
   "num_valid": 48,
@@ -147,7 +147,7 @@ Comprehensive evaluation running **THREE different evaluation modes** on each mo
 # Edit these in evaluate_comprehensive.py:
 
 DATASETS = {
-    "ood_validation": "~/2025_12_5_val_set_medium_stakes_balanced.csv",
+    "ood_validation": "data/2026_01_29_new_val_set_probabilities_add_to_100.csv",
     "indist_validation": "data/in_distribution_val_set.csv",
     "training": "data/training_eval_set.csv",
 }
@@ -216,7 +216,7 @@ python evaluate_comprehensive.py
 | **Accepts numbers (1,2,3)** | ✅ Yes | ✅ Yes |
 | **Accepts letters (a,b,c)** | ✅ Yes | ✅ Yes |
 | **Multiple answer formats** | ✅ 9+ patterns | ✅ 9+ patterns |
-| **Save responses** | ✅ Optional flag | ❌ No |
+| **Save responses** | ✅ Always (opt-out with --no_save_responses) | ❌ No |
 | **Token limit** | ✅ 4096 (configurable) | ✅ 4096 (fixed) |
 | **Multiple metrics** | ❌ Single run | ✅ 3 methods |
 | **Log probabilities** | ❌ No | ✅ Yes |
@@ -242,9 +242,8 @@ Use this if you want to:
 python evaluate.py \
     --model_path <YOUR_MODEL> \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --temperature 0 \
-    --save_responses \
     --output results.json
 ```
 
@@ -319,10 +318,9 @@ Regardless of which script you use, here's when to use different temperatures:
 python evaluate.py \
     --model_path ./my-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 25 \
     --temperature 0 \
-    --save_responses \
     --output quick_eval.json
 
 # Check CARA rate
@@ -336,10 +334,9 @@ for temp in 0 0.7 1.0; do
     python evaluate.py \
         --model_path ./my-model/final \
         --base_model Qwen/Qwen3-8B \
-        --val_csv data/val_set_medium_stakes.csv \
+        --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
         --temperature $temp \
-        --save_responses \
-        --output results_temp${temp}.json
+            --output results_temp${temp}.json
 done
 
 # Compare results
@@ -352,14 +349,13 @@ done
 ### Workflow 3: Multi-Dataset Evaluation
 ```bash
 # Evaluate on all three datasets
-for dataset in val_set_medium_stakes in_distribution_val_set training_eval_set; do
+for dataset in 2026_01_29_new_val_set_probabilities_add_to_100 in_distribution_val_set training_eval_set; do
     python evaluate.py \
         --model_path ./my-model/final \
         --base_model Qwen/Qwen3-8B \
         --val_csv data/${dataset}.csv \
         --temperature 0 \
-        --save_responses \
-        --output results_${dataset}.json
+            --output results_${dataset}.json
 done
 ```
 

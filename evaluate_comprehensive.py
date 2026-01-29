@@ -24,7 +24,7 @@ from peft import PeftModel
 
 # === DATASETS ===
 DATASETS = {
-    "ood_validation": "~/2025_12_5_val_set_medium_stakes_balanced.csv",
+    "ood_validation": "data/2026_01_29_new_val_set_probabilities_add_to_100.csv",
     "indist_validation": "data/in_distribution_val_set.csv",
     "training": "data/training_eval_set.csv",
 }

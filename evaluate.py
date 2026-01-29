@@ -5,6 +5,12 @@ Dramatically improves parse rate by matching many answer formats.
 """
 
 import gc
+import sys
+import time
+
+# Flush output immediately so logs are visible in real time
+sys.stdout.reconfigure(line_buffering=True)
+
 import torch
 torch.cuda.empty_cache()
 gc.collect()
@@ -106,17 +112,67 @@ def extract_choice_permissive(response, num_options):
     return None
 
 
+def convert_numpy(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if hasattr(obj, 'item'):  # numpy scalar
+        return obj.item()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy(x) for x in obj]
+    return obj
+
+
+def save_incremental(output_path, args, results, failed_responses, situations_evaluated):
+    """Save current results to disk. Called after every situation for crash resilience."""
+    valid = [r for r in results if r["is_cooperate"] is not None]
+    if valid:
+        cooperate_rate = sum(r["is_cooperate"] for r in valid) / len(valid)
+        rebel_rate = sum(r["is_rebel"] for r in valid) / len(valid)
+        steal_rate = sum(r["is_steal"] for r in valid) / len(valid)
+        cara_rate = sum(r["is_best_cara"] for r in valid) / len(valid)
+    else:
+        cooperate_rate = rebel_rate = steal_rate = cara_rate = 0
+
+    parse_rate = len(valid) / len(results) if results else 0
+
+    output_data = convert_numpy({
+        "evaluation_config": {
+            "temperature": args.temperature,
+            "max_new_tokens": args.max_new_tokens,
+            "num_situations": situations_evaluated,
+            "base_model": args.base_model,
+            "model_path": args.model_path
+        },
+        "metrics": {
+            "parse_rate": parse_rate,
+            "cooperate_rate": cooperate_rate,
+            "rebel_rate": rebel_rate,
+            "steal_rate": steal_rate,
+            "best_cara_rate": cara_rate
+        },
+        "num_valid": len(valid),
+        "num_total": len(results),
+        "results": None if args.no_save_responses else results,
+        "failed_responses": failed_responses[:10]
+    })
+
+    with open(output_path, "w") as f:
+        json.dump(output_data, f, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default=None, help="Path to fine-tuned LoRA adapter (omit to evaluate base model only)")
-    parser.add_argument("--val_csv", type=str, default="data/val_set_medium_stakes.csv")
+    parser.add_argument("--val_csv", type=str, default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv")
     parser.add_argument("--num_situations", type=int, default=50, help="Number of situations to evaluate")
     parser.add_argument("--output", type=str, default="results_permissive.json")
-    parser.add_argument("--save_responses", action="store_true", help="Save full responses for debugging (recommended, adds ~0 time)")
+    parser.add_argument("--no_save_responses", action="store_true", help="Do NOT save full responses (by default, all CoT responses are saved)")
     parser.add_argument("--max_new_tokens", type=int, default=4096, help="Max tokens to generate (default 4096 - generous to avoid truncation)")
     parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Base model ID (e.g., Qwen/Qwen3-8B)")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature (0 = deterministic, 0.7 = default, 1.0 = high diversity)")
     parser.add_argument("--disable_thinking", action="store_true", help="Disable thinking mode in chat template (auto-enabled for base models, needed for Qwen3)")
+    parser.add_argument("--max_time_per_generation", type=float, default=120, help="Max seconds per generation before timeout (default: 120)")
     args = parser.parse_args()
 
     # Auto-enable disable_thinking for base model evaluation (no adapter)
@@ -179,13 +235,18 @@ def main():
 
     print(f"Evaluating on {len(situations)} situations with PERMISSIVE parser...")
     print(f"Temperature: {args.temperature} ({'deterministic' if args.temperature == 0 else 'sampling'})")
+    print(f"Max time per generation: {args.max_time_per_generation}s")
+    print(f"Saving CoT responses: {'NO (--no_save_responses)' if args.no_save_responses else 'YES (default)'}")
+    print(f"Results will be saved incrementally to: {args.output}")
+    print()
 
     results = []
     failed_responses = []
+    generation_times = []
+    eval_start_time = time.time()
 
     for i, sit in enumerate(situations):
-        if (i + 1) % 10 == 0:
-            print(f"  Progress: {i+1}/{len(situations)}")
+        sit_start = time.time()
 
         prompt = remove_instruction_suffix(sit["prompt"])
         messages = [{"role": "user", "content": prompt}]
@@ -198,6 +259,7 @@ def main():
 
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
+        gen_start = time.time()
         with torch.no_grad():
             if args.temperature == 0:
                 # Deterministic generation
@@ -205,7 +267,8 @@ def main():
                     **inputs,
                     max_new_tokens=args.max_new_tokens,
                     do_sample=False,
-                    pad_token_id=tokenizer.eos_token_id
+                    pad_token_id=tokenizer.eos_token_id,
+                    max_time=args.max_time_per_generation
                 )
             else:
                 # Sampling with temperature
@@ -214,29 +277,43 @@ def main():
                     max_new_tokens=args.max_new_tokens,
                     temperature=args.temperature,
                     do_sample=True,
-                    pad_token_id=tokenizer.eos_token_id
+                    pad_token_id=tokenizer.eos_token_id,
+                    max_time=args.max_time_per_generation
                 )
+        gen_elapsed = time.time() - gen_start
 
         response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        num_generated_tokens = outputs[0].shape[0] - inputs["input_ids"].shape[1]
         choice = extract_choice_permissive(response, sit["num_options"])
 
         if choice and choice in sit["options"]:
+            option_type = sit["options"][choice]["type"]
             results.append({
                 "situation_id": sit["situation_id"],
                 "choice": choice,
-                "is_cooperate": sit["options"][choice]["type"] == "Cooperate",
+                "option_type": option_type,
+                "is_cooperate": option_type == "Cooperate",
+                "is_rebel": option_type == "Rebel",
+                "is_steal": option_type == "Steal",
                 "is_best_cara": sit["options"][choice]["is_best_cara"],
-                "response": response if args.save_responses else None,
-                "response_length": len(response)
+                "response": None if args.no_save_responses else response,
+                "response_length": len(response),
+                "num_tokens_generated": int(num_generated_tokens),
+                "generation_time_seconds": round(gen_elapsed, 1)
             })
         else:
             results.append({
                 "situation_id": sit["situation_id"],
                 "choice": None,
+                "option_type": None,
                 "is_cooperate": None,
+                "is_rebel": None,
+                "is_steal": None,
                 "is_best_cara": None,
-                "response": response if args.save_responses else None,
-                "response_length": len(response)
+                "response": None if args.no_save_responses else response,
+                "response_length": len(response),
+                "num_tokens_generated": int(num_generated_tokens),
+                "generation_time_seconds": round(gen_elapsed, 1)
             })
             failed_responses.append({
                 "situation_id": sit["situation_id"],
@@ -244,16 +321,40 @@ def main():
                 "response": response
             })
 
-    # Calculate metrics
+        generation_times.append(gen_elapsed)
+        sit_elapsed = time.time() - sit_start
+        avg_time = sum(generation_times) / len(generation_times)
+        remaining = avg_time * (len(situations) - i - 1)
+
+        # Print progress after every situation
+        status = "OK" if choice else "PARSE_FAIL"
+        print(f"  [{i+1}/{len(situations)}] sit_id={sit['situation_id']} | {status} | "
+              f"{int(num_generated_tokens)} tokens | {gen_elapsed:.1f}s | "
+              f"ETA: {remaining/60:.1f}min")
+
+        # Warn if generation was very slow (possible hang)
+        if gen_elapsed > 60:
+            print(f"  WARNING: Generation took {gen_elapsed:.0f}s (>{60}s). "
+                  f"Model may be generating excessively long output.")
+        if int(num_generated_tokens) >= args.max_new_tokens - 10:
+            print(f"  WARNING: Hit token limit ({args.max_new_tokens}). "
+                  f"Response may be truncated. Consider --max_new_tokens increase.")
+
+        # Save incrementally after every situation
+        save_incremental(args.output, args, results, failed_responses, i + 1)
+
+    # Final summary
+    total_elapsed = time.time() - eval_start_time
     valid = [r for r in results if r["is_cooperate"] is not None]
     if valid:
         cooperate_rate = sum(r["is_cooperate"] for r in valid) / len(valid)
+        rebel_rate = sum(r["is_rebel"] for r in valid) / len(valid)
+        steal_rate = sum(r["is_steal"] for r in valid) / len(valid)
         cara_rate = sum(r["is_best_cara"] for r in valid) / len(valid)
     else:
-        cooperate_rate = 0
-        cara_rate = 0
+        cooperate_rate = rebel_rate = steal_rate = cara_rate = 0
 
-    parse_rate = len(valid) / len(results)
+    parse_rate = len(valid) / len(results) if results else 0
 
     print(f"\n{'='*50}")
     print("EVALUATION RESULTS (Permissive Parser)")
@@ -262,10 +363,15 @@ def main():
     print(f"Valid responses: {len(valid)} ({100*parse_rate:.1f}%)")
     print(f"Failed to parse: {len(failed_responses)}")
     print(f"\n% choosing COOPERATE: {100*cooperate_rate:.1f}%")
+    print(f"% choosing REBEL:     {100*rebel_rate:.1f}%")
+    print(f"% choosing STEAL:     {100*steal_rate:.1f}%")
     print(f"% choosing best CARA: {100*cara_rate:.1f}%")
+    print(f"\nTotal time: {total_elapsed/60:.1f} minutes ({total_elapsed:.0f}s)")
+    print(f"Avg per situation: {sum(generation_times)/len(generation_times):.1f}s")
+    print(f"Avg tokens generated: {sum(r.get('num_tokens_generated', 0) for r in results)/len(results):.0f}")
     print("="*50)
 
-    # Print failed responses FIRST (before JSON save which might fail)
+    # Print failed responses
     if failed_responses:
         print(f"\n{'='*50}")
         print(f"SAMPLE FAILED RESPONSES ({min(5, len(failed_responses))} of {len(failed_responses)})")
@@ -275,40 +381,9 @@ def main():
             print(fr['response'][:600])
             print("...")
 
-    # Helper to convert numpy types to Python native types
-    def convert_numpy(obj):
-        if hasattr(obj, 'item'):  # numpy scalar
-            return obj.item()
-        elif isinstance(obj, dict):
-            return {k: convert_numpy(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_numpy(x) for x in obj]
-        return obj
-
-    # Save results
-    output_data = convert_numpy({
-        "evaluation_config": {
-            "temperature": args.temperature,
-            "max_new_tokens": args.max_new_tokens,
-            "num_situations": len(situations),
-            "base_model": args.base_model,
-            "model_path": args.model_path
-        },
-        "metrics": {
-            "parse_rate": parse_rate,
-            "cooperate_rate": cooperate_rate,
-            "best_cara_rate": cara_rate
-        },
-        "num_valid": len(valid),
-        "num_total": len(results),
-        "results": results if args.save_responses else None,
-        "failed_responses": failed_responses[:10]  # Save first 10 failures for debugging
-    })
-
-    with open(args.output, "w") as f:
-        json.dump(output_data, f, indent=2)
-
-    print(f"\nResults saved to {args.output}")
+    # Final save (already saved incrementally, but save once more with final metrics)
+    save_incremental(args.output, args, results, failed_responses, len(situations))
+    print(f"\nFinal results saved to {args.output}")
 
     # Cleanup
     del model

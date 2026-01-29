@@ -23,9 +23,8 @@ pip install torch transformers pandas peft accelerate
 python evaluate.py \
     --model_path /path/to/your/finetuned/model \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
-    --save_responses \
     --output results.json
 ```
 
@@ -40,7 +39,7 @@ python evaluate.py \
   - `0.7` = moderate sampling (default)
   - `1.0` = high diversity
 - `--disable_thinking`: Disable thinking mode (auto-enabled for base models to prevent Qwen3 hangs)
-- `--save_responses`: Save full model responses for debugging (highly recommended)
+- `--no_save_responses`: Disable saving full model responses (by default, all CoT responses are saved)
 - `--max_new_tokens`: Max tokens to generate (default: 4096)
 
 ## Evaluation Scripts
@@ -62,29 +61,26 @@ python evaluate.py \
 python evaluate.py \
     --model_path ./my-risk-averse-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --num_situations 50 \
-    --save_responses \
     --output my_model_results.json
 
 # Deterministic (temperature=0, greedy decoding)
 python evaluate.py \
     --model_path ./my-risk-averse-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --temperature 0 \
     --num_situations 50 \
-    --save_responses \
     --output my_model_results_temp0.json
 
 # High temperature (temperature=1.0, more diverse)
 python evaluate.py \
     --model_path ./my-risk-averse-model/final \
     --base_model Qwen/Qwen3-8B \
-    --val_csv data/val_set_medium_stakes.csv \
+    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
     --temperature 1.0 \
     --num_situations 50 \
-    --save_responses \
     --output my_model_results_temp1.json
 ```
 
@@ -115,11 +111,15 @@ python evaluate_comprehensive.py
 
 ### Evaluation Datasets Included
 
-1. **`val_set_medium_stakes.csv`** (OOD Validation)
-   - **Medium-stakes gambles** - different distribution from training
+1. **`2026_01_29_new_val_set_probabilities_add_to_100.csv`** (OOD Validation - Current)
    - **Primary evaluation set** for generalization
-   - 50+ unique situations
-   - Mix of Cooperate/Rebel/Steal options
+   - Merged validation set including Rebel and Steal scenarios
+   - Probabilities add to 100% in all scenarios
+   - CARA-optimal options can be Cooperate, Rebel, or Steal
+
+   **`val_set_medium_stakes.csv`** (OOD Validation - Legacy)
+   - Previous primary evaluation set (medium-stakes gambles)
+   - Kept for backward compatibility
 
 2. **`in_distribution_val_set.csv`** (In-Distribution Validation)
    - **Low-stakes gambles** - same distribution as training
@@ -151,12 +151,14 @@ Each CSV has the following columns:
 - Higher CARA rate = more risk-averse behavior
 - **Target:** 80%+ indicates strong risk aversion
 
-### Cooperate Rate
-**% of times the model chooses "Cooperate" options**
+### Cooperate / Rebel / Steal Rates
+**% of times the model chooses each option type**
 
-- Cooperate = safe/conservative choices with lower variance
-- Typically correlates with CARA rate (CARA-optimal is usually Cooperate)
-- In the validation set: 25/27 CARA-optimal choices are Cooperate
+- **Cooperate** = safe/conservative choices with lower variance
+- **Rebel** = risky choices with higher expected value but more variance
+- **Steal** = very risky choices with potential for large gains and large losses
+- In the new validation set, CARA-optimal options can be any type (not just Cooperate)
+- These rates show the model's risk profile independently of CARA optimality
 
 ### Parse Rate
 **% of responses successfully parsed to extract a choice**
@@ -171,7 +173,7 @@ Each CSV has the following columns:
 
 **Yes, the evaluation uses the same fixed set of questions each time**, determined by:
 
-1. **Dataset file**: The CSV file you specify (e.g., `val_set_medium_stakes.csv`)
+1. **Dataset file**: The CSV file you specify (e.g., `2026_01_29_new_val_set_probabilities_add_to_100.csv`)
 2. **Number of situations**: The `--num_situations` parameter (default: 50)
 3. **Selection method**: Takes the **first N unique `situation_id` values** from the CSV
 
@@ -205,6 +207,8 @@ Evaluation saves results to JSON with this structure:
   "metrics": {
     "parse_rate": 0.96,
     "cooperate_rate": 0.83,
+    "rebel_rate": 0.12,
+    "steal_rate": 0.05,
     "best_cara_rate": 0.79
   },
   "num_valid": 48,
@@ -228,7 +232,7 @@ Evaluation saves results to JSON with this structure:
 
 ### Low Parse Rate (<90%)
 
-1. **Save responses first**: Run with `--save_responses` flag
+1. **Check saved responses**: Full CoT responses are saved by default
 2. **Check response lengths**: Are they hitting the token limit?
 3. **Inspect failed responses**: Look at `failed_responses` in output JSON
 4. **Common issues:**
@@ -261,13 +265,13 @@ Fine-tuned models typically learn the output format from training data and don't
 ## Best Practices
 
 ### ✅ DO:
-- **Always use `--save_responses`** - costs nothing, invaluable for debugging
+- **Full CoT responses are saved by default** - invaluable for debugging
 - **Start with 25-50 situations** - good balance of speed vs accuracy
 - **Save results incrementally** if evaluating multiple models
 - **Check parse rate first** - if <90%, investigate before trusting metrics
 
 ### ❌ DON'T:
-- Don't run without saving responses (you'll regret it when debugging)
+- Don't use `--no_save_responses` unless you're sure (you'll regret it when debugging)
 - Don't assume low CARA rate = bad model (check parse rate first!)
 - Don't use `max_new_tokens < 2048` (causes truncation)
 - Don't evaluate 200+ situations unless you have time/compute to spare
