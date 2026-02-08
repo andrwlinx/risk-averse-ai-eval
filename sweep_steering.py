@@ -39,8 +39,8 @@ from peft import PeftModel
 
 from evaluate import load_steering_vector, load_situations, run_evaluation
 
-DEFAULT_LAYERS = [7, 10, 14, 18, 21, 24]
-DEFAULT_ALPHAS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 10.0]
+DEFAULT_LAYERS = [10, 12, 14]
+DEFAULT_ALPHAS = [-10.0, -5.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 10.0]
 
 
 def plot_sweep(results, base_ra, layer_candidates, output_path):
