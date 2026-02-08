@@ -138,29 +138,23 @@ def main():
         help="Output path for the steering vector"
     )
     parser.add_argument(
-        "--averse_type",
-        type=str,
-        default="too_risk",
-        help="Type label for risk-averse examples (in type_column)"
-    )
-    parser.add_argument(
-        "--neutral_type",
-        type=str,
-        default="lin",
-        help="Type label for risk-neutral examples (in type_column)"
-    )
-    parser.add_argument(
         "--position",
         type=str,
         default="think",
         help="Position to capture: 'think' (after <think>), 'last', or integer"
     )
-    # Column name arguments for Elliott's CSV format
+    # Filtering and column arguments
     parser.add_argument(
-        "--type_column",
+        "--filter_column",
         type=str,
-        default="rejected_type",
-        help="Column containing type labels (default: 'rejected_type' for Elliott's format)"
+        default="low_bucket_label",
+        help="Column to filter rows by (default: 'low_bucket_label')"
+    )
+    parser.add_argument(
+        "--filter_value",
+        type=str,
+        default="lin_only",
+        help="Value to filter on for clean contrastive pairs (default: 'lin_only')"
     )
     parser.add_argument(
         "--averse_column",
@@ -179,8 +173,8 @@ def main():
     # Check if training file exists
     if not Path(args.training_csv).exists():
         print(f"ERROR: Training file not found: {args.training_csv}")
-        print("\nThis script expects Elliott's CSV with columns:")
-        print(f"  - '{args.type_column}': containing type labels like '010_only' and 'lin_only'")
+        print("\nThis script expects a CSV with columns:")
+        print(f"  - '{args.filter_column}': for filtering rows (e.g. 'lin_only')")
         print(f"  - '{args.averse_column}': containing risk-averse (chosen) CoT text")
         print(f"  - '{args.neutral_column}': containing risk-neutral (rejected) CoT text")
         print("\nPlease ensure the training set is in the data/ directory.")
@@ -190,34 +184,33 @@ def main():
     df = pd.read_csv(args.training_csv)
 
     # Validate required columns
-    required_cols = [args.type_column, args.averse_column, args.neutral_column]
+    required_cols = [args.filter_column, args.averse_column, args.neutral_column]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         print(f"ERROR: Missing required columns: {missing}")
         print(f"Available columns: {df.columns.tolist()}")
         sys.exit(1)
 
-    # Elliott's logic:
-    # - Averse examples: rows where rejected_type == '010_only', use 'chosen_full' column
-    # - Neutral examples: rows where rejected_type == 'lin_only', use 'rejected_full' column
-    averse_df = df[df[args.type_column] == args.averse_type]
-    neutral_df = df[df[args.type_column] == args.neutral_type]
+    # Elliott's contrastive pairing strategy:
+    # Filter to specific situation type (e.g. lin_only) and use same-row pairs
+    # so chosen_full (averse) and rejected_full (neutral) address the exact same scenario
+    filtered_df = df[df[args.filter_column] == args.filter_value]
+    filtered_df = filtered_df.dropna(subset=[args.averse_column, args.neutral_column])
 
-    averse_cots = averse_df[args.averse_column].dropna().tolist()
-    neutral_cots = neutral_df[args.neutral_column].dropna().tolist()
+    print(f"Found {len(filtered_df)} paired examples where {args.filter_column} == '{args.filter_value}'")
+    print(f"  Averse column: {args.averse_column}, Neutral column: {args.neutral_column}")
 
-    print(f"Found {len(averse_cots)} risk-averse examples ({args.averse_type} -> {args.averse_column})")
-    print(f"Found {len(neutral_cots)} risk-neutral examples ({args.neutral_type} -> {args.neutral_column})")
-
-    if len(averse_cots) == 0 or len(neutral_cots) == 0:
-        print(f"\nERROR: Need both averse and neutral CoTs")
-        print(f"Available types in '{args.type_column}': {df[args.type_column].unique().tolist()}")
+    if len(filtered_df) == 0:
+        print(f"\nERROR: No rows match filter {args.filter_column} == '{args.filter_value}'")
+        print(f"Available values in '{args.filter_column}': {df[args.filter_column].unique().tolist()}")
         sys.exit(1)
 
     # Limit to requested number of pairs
-    num_pairs = min(args.num_pairs, len(averse_cots), len(neutral_cots))
-    averse_cots = averse_cots[:num_pairs]
-    neutral_cots = neutral_cots[:num_pairs]
+    num_pairs = min(args.num_pairs, len(filtered_df))
+    filtered_df = filtered_df.head(num_pairs)
+
+    averse_cots = filtered_df[args.averse_column].tolist()
+    neutral_cots = filtered_df[args.neutral_column].tolist()
 
     print(f"\nUsing {num_pairs} pairs for steering vector computation")
     print(f"Extracting activations from layer {args.layer} at position '{args.position}'")
@@ -287,11 +280,10 @@ def main():
         "position": args.position,
         "num_pairs": len(vector_diffs),
         "base_model": args.base_model,
-        "averse_type": args.averse_type,
-        "neutral_type": args.neutral_type,
+        "filter_column": args.filter_column,
+        "filter_value": args.filter_value,
         "averse_column": args.averse_column,
         "neutral_column": args.neutral_column,
-        "type_column": args.type_column,
         "hidden_size": steering_vector.shape[0]
     }
 
