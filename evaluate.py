@@ -7,6 +7,8 @@ Dramatically improves parse rate by matching many answer formats.
 import gc
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 # Flush output immediately so logs are visible in real time
 sys.stdout.reconfigure(line_buffering=True)
@@ -21,6 +23,103 @@ import json
 import re
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+
+
+# ============================================================================
+# ACTIVATION STEERING UTILITIES
+# ============================================================================
+
+class SteeringHook:
+    """Forward hook that adds a steering vector to residual stream activations."""
+
+    def __init__(self, steering_vector, alpha=1.0):
+        """
+        Args:
+            steering_vector: Tensor of shape (hidden_size,)
+            alpha: Steering strength multiplier
+        """
+        self.steering_vector = steering_vector
+        self.alpha = alpha
+        self.handle = None
+
+    def __call__(self, module, input, output):
+        """Add steering vector to all positions in the sequence."""
+        if isinstance(output, tuple):
+            hidden_states = output[0]
+            # Add steering vector to all positions
+            # Shape: hidden_states is (batch, seq_len, hidden_size)
+            hidden_states = hidden_states + self.alpha * self.steering_vector.to(hidden_states.device)
+            return (hidden_states,) + output[1:]
+        else:
+            return output + self.alpha * self.steering_vector.to(output.device)
+
+    def register(self, layer_module):
+        """Register this hook on a layer module."""
+        self.handle = layer_module.register_forward_hook(self)
+        return self
+
+    def remove(self):
+        """Remove the hook."""
+        if self.handle is not None:
+            self.handle.remove()
+            self.handle = None
+
+
+@contextmanager
+def steering_context(model, steering_vector, alpha, layer):
+    """Context manager to temporarily apply steering during generation.
+
+    Args:
+        model: The transformer model
+        steering_vector: Tensor of shape (hidden_size,)
+        alpha: Steering strength (positive = more risk-averse, negative = more risk-neutral)
+        layer: Which layer to apply steering to (0-indexed)
+
+    Usage:
+        with steering_context(model, vector, alpha=2.0, layer=14):
+            outputs = model.generate(...)
+    """
+    if steering_vector is None or alpha == 0:
+        yield
+        return
+
+    hook = SteeringHook(steering_vector, alpha)
+    target_layer = model.model.layers[layer]
+    hook.register(target_layer)
+
+    try:
+        yield
+    finally:
+        hook.remove()
+
+
+def load_steering_vector(path):
+    """Load a steering vector from a .pt file.
+
+    Returns:
+        tuple: (vector, layer, metadata) where metadata contains info about how it was generated
+    """
+    if path is None:
+        return None, None, None
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Steering vector not found: {path}")
+
+    data = torch.load(path, map_location="cpu", weights_only=False)
+
+    # Handle both old format (just tensor) and new format (dict with metadata)
+    if isinstance(data, dict):
+        vector = data["vector"]
+        layer = data.get("layer", 14)
+        metadata = {k: v for k, v in data.items() if k != "vector"}
+    else:
+        # Old format: just the tensor
+        vector = data
+        layer = 14  # Default to layer 14
+        metadata = {}
+
+    return vector, layer, metadata
 
 
 def remove_instruction_suffix(prompt):
@@ -142,7 +241,10 @@ def save_incremental(output_path, args, results, failed_responses, situations_ev
             "max_new_tokens": args.max_new_tokens,
             "num_situations": situations_evaluated,
             "base_model": args.base_model,
-            "model_path": args.model_path
+            "model_path": args.model_path,
+            "steering_path": args.steering_path,
+            "steering_alpha": args.alpha,
+            "steering_layer": args.steering_layer
         },
         "metrics": {
             "parse_rate": parse_rate,
@@ -161,6 +263,199 @@ def save_incremental(output_path, args, results, failed_responses, situations_ev
         json.dump(output_data, f, indent=2)
 
 
+def load_situations(val_csv, num_situations):
+    """Load and parse situations from a validation CSV.
+
+    Args:
+        val_csv: Path to validation CSV file
+        num_situations: Max number of situations to load
+
+    Returns:
+        List of situation dicts with keys: situation_id, prompt, num_options, options
+    """
+    df = pd.read_csv(val_csv)
+    situations = []
+    for sit_id in df["situation_id"].unique()[:num_situations]:
+        sit_data = df[df["situation_id"] == sit_id]
+        prompt = sit_data["prompt_text"].iloc[0]
+        num_options = len(sit_data)
+        options = {}
+        for _, row in sit_data.iterrows():
+            idx = int(row["option_index"])
+            letter = chr(ord("a") + idx)
+            number = str(idx + 1)  # 0→"1", 1→"2", etc.
+            option_data = {
+                "type": row["option_type"],
+                "is_best_cara": row["is_best_cara_display"] == True
+            }
+            # Add BOTH letter and number keys so we accept either format
+            options[letter] = option_data
+            options[number] = option_data
+        situations.append({
+            "situation_id": sit_id,
+            "prompt": prompt,
+            "num_options": num_options,
+            "options": options
+        })
+    return situations
+
+
+def run_evaluation(model, tokenizer, situations, steering_vector,
+                   alpha=0.0, steering_layer=14,
+                   temperature=0.7, max_new_tokens=4096,
+                   max_time_per_generation=120,
+                   disable_thinking=False, no_save_responses=True,
+                   verbose=True, incremental_save_path=None, incremental_save_args=None):
+    """Run evaluation loop over situations with given steering params.
+
+    Args:
+        model: The loaded transformer model
+        tokenizer: The tokenizer
+        situations: List of situation dicts (from load_situations)
+        steering_vector: Steering vector tensor, or None
+        alpha: Steering strength
+        steering_layer: Layer index for steering hook
+        temperature: Sampling temperature (0 = deterministic)
+        max_new_tokens: Max tokens to generate
+        max_time_per_generation: Timeout per generation in seconds
+        disable_thinking: Disable thinking mode in chat template
+        no_save_responses: If True, don't save full responses in results
+        verbose: Print per-situation progress
+        incremental_save_path: If set, save results after each situation
+        incremental_save_args: args object needed by save_incremental
+
+    Returns:
+        dict with keys: cooperate_rate, rebel_rate, steal_rate, cara_rate,
+                        parse_rate, num_valid, num_total, results,
+                        failed_responses, generation_times, total_elapsed
+    """
+    results = []
+    failed_responses = []
+    generation_times = []
+    eval_start_time = time.time()
+
+    for i, sit in enumerate(situations):
+        sit_start = time.time()
+
+        prompt = remove_instruction_suffix(sit["prompt"])
+        messages = [{"role": "user", "content": prompt}]
+
+        # Apply chat template (disable thinking for Qwen3 base models)
+        template_kwargs = {"tokenize": False, "add_generation_prompt": True}
+        if disable_thinking:
+            template_kwargs["enable_thinking"] = False
+        text = tokenizer.apply_chat_template(messages, **template_kwargs)
+
+        inputs = tokenizer(text, return_tensors="pt").to(model.device)
+
+        gen_start = time.time()
+        with torch.no_grad(), steering_context(model, steering_vector, alpha, steering_layer):
+            if temperature == 0:
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=tokenizer.eos_token_id,
+                    max_time=max_time_per_generation
+                )
+            else:
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=True,
+                    pad_token_id=tokenizer.eos_token_id,
+                    max_time=max_time_per_generation
+                )
+        gen_elapsed = time.time() - gen_start
+
+        response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+        num_generated_tokens = outputs[0].shape[0] - inputs["input_ids"].shape[1]
+        choice = extract_choice_permissive(response, sit["num_options"])
+
+        if choice and choice in sit["options"]:
+            option_type = sit["options"][choice]["type"]
+            results.append({
+                "situation_id": sit["situation_id"],
+                "choice": choice,
+                "option_type": option_type,
+                "is_cooperate": option_type == "Cooperate",
+                "is_rebel": option_type == "Rebel",
+                "is_steal": option_type == "Steal",
+                "is_best_cara": sit["options"][choice]["is_best_cara"],
+                "response": None if no_save_responses else response,
+                "response_length": len(response),
+                "num_tokens_generated": int(num_generated_tokens),
+                "generation_time_seconds": round(gen_elapsed, 1)
+            })
+        else:
+            results.append({
+                "situation_id": sit["situation_id"],
+                "choice": None,
+                "option_type": None,
+                "is_cooperate": None,
+                "is_rebel": None,
+                "is_steal": None,
+                "is_best_cara": None,
+                "response": None if no_save_responses else response,
+                "response_length": len(response),
+                "num_tokens_generated": int(num_generated_tokens),
+                "generation_time_seconds": round(gen_elapsed, 1)
+            })
+            failed_responses.append({
+                "situation_id": sit["situation_id"],
+                "num_options": sit["num_options"],
+                "response": response
+            })
+
+        generation_times.append(gen_elapsed)
+        avg_time = sum(generation_times) / len(generation_times)
+        remaining = avg_time * (len(situations) - i - 1)
+
+        if verbose:
+            status = "OK" if choice else "PARSE_FAIL"
+            print(f"  [{i+1}/{len(situations)}] sit_id={sit['situation_id']} | {status} | "
+                  f"{int(num_generated_tokens)} tokens | {gen_elapsed:.1f}s | "
+                  f"ETA: {remaining/60:.1f}min")
+
+            if gen_elapsed > 60:
+                print(f"  WARNING: Generation took {gen_elapsed:.0f}s (>{60}s). "
+                      f"Model may be generating excessively long output.")
+            if int(num_generated_tokens) >= max_new_tokens - 10:
+                print(f"  WARNING: Hit token limit ({max_new_tokens}). "
+                      f"Response may be truncated. Consider --max_new_tokens increase.")
+
+        if incremental_save_path and incremental_save_args:
+            save_incremental(incremental_save_path, incremental_save_args,
+                             results, failed_responses, i + 1)
+
+    total_elapsed = time.time() - eval_start_time
+    valid = [r for r in results if r["is_cooperate"] is not None]
+    if valid:
+        cooperate_rate = sum(r["is_cooperate"] for r in valid) / len(valid)
+        rebel_rate = sum(r["is_rebel"] for r in valid) / len(valid)
+        steal_rate = sum(r["is_steal"] for r in valid) / len(valid)
+        cara_rate = sum(r["is_best_cara"] for r in valid) / len(valid)
+    else:
+        cooperate_rate = rebel_rate = steal_rate = cara_rate = 0
+
+    parse_rate = len(valid) / len(results) if results else 0
+
+    return {
+        "cooperate_rate": cooperate_rate,
+        "rebel_rate": rebel_rate,
+        "steal_rate": steal_rate,
+        "cara_rate": cara_rate,
+        "parse_rate": parse_rate,
+        "num_valid": len(valid),
+        "num_total": len(results),
+        "results": results,
+        "failed_responses": failed_responses,
+        "generation_times": generation_times,
+        "total_elapsed": total_elapsed,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default=None, help="Path to fine-tuned LoRA adapter (omit to evaluate base model only)")
@@ -173,6 +468,9 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature (0 = deterministic, 0.7 = default, 1.0 = high diversity)")
     parser.add_argument("--disable_thinking", action="store_true", help="Disable thinking mode in chat template (auto-enabled for base models, needed for Qwen3)")
     parser.add_argument("--max_time_per_generation", type=float, default=120, help="Max seconds per generation before timeout (default: 120)")
+    parser.add_argument("--steering_path", type=str, default=None, help="Path to steering vector .pt file (optional)")
+    parser.add_argument("--alpha", type=float, default=0.0, help="Steering strength: positive=more risk-averse, negative=more risk-neutral (default: 0 = no steering)")
+    parser.add_argument("--steering_layer", type=int, default=None, help="Layer to apply steering (default: use layer from .pt file, or 14)")
     args = parser.parse_args()
 
     # Auto-generate descriptive output filename if not provided
@@ -188,7 +486,9 @@ def main():
                 model_short = parts[-2] if len(parts) >= 2 else model_short
         else:
             model_short = args.base_model.replace("/", "_") + "_base"
-        args.output = f"eval_{model_short}_temp{args.temperature}_{timestamp}.json"
+        # Include alpha in filename if steering is enabled
+        alpha_suffix = f"_alpha{args.alpha}" if args.steering_path and args.alpha != 0 else ""
+        args.output = f"eval_{model_short}_temp{args.temperature}{alpha_suffix}_{timestamp}.json"
 
     # Auto-enable disable_thinking for base model evaluation (no adapter)
     if args.model_path is None and not args.disable_thinking:
@@ -220,167 +520,72 @@ def main():
 
     model.eval()
 
-    print("Loading validation data...")
-    df = pd.read_csv(args.val_csv)
+    # Load steering vector if provided
+    steering_vector = None
+    steering_layer = args.steering_layer if args.steering_layer is not None else 14
 
-    # Group by situation_id
-    situations = []
-    for sit_id in df["situation_id"].unique()[:args.num_situations]:
-        sit_data = df[df["situation_id"] == sit_id]
-        prompt = sit_data["prompt_text"].iloc[0]
-        num_options = len(sit_data)
-        options = {}
-        for _, row in sit_data.iterrows():
-            idx = int(row["option_index"])
-            letter = chr(ord("a") + idx)
-            number = str(idx + 1)  # 0→"1", 1→"2", etc.
-            option_data = {
-                "type": row["option_type"],
-                "is_best_cara": row["is_best_cara_display"] == True
-            }
-            # Add BOTH letter and number keys so we accept either format
-            options[letter] = option_data
-            options[number] = option_data
-        situations.append({
-            "situation_id": sit_id,
-            "prompt": prompt,
-            "num_options": num_options,
-            "options": options
-        })
+    if args.steering_path:
+        print(f"Loading steering vector from {args.steering_path}...")
+        try:
+            steering_vector, saved_layer, metadata = load_steering_vector(args.steering_path)
+            # Use saved layer if not overridden by CLI
+            if args.steering_layer is None and saved_layer is not None:
+                steering_layer = saved_layer
+            # Update args so it gets saved in output JSON
+            args.steering_layer = steering_layer
+            print(f"  Vector shape: {steering_vector.shape}")
+            print(f"  Steering layer: {steering_layer}")
+            print(f"  Alpha (strength): {args.alpha}")
+            if metadata:
+                print(f"  Generated from: {metadata.get('num_pairs', '?')} pairs")
+                print(f"  Position: {metadata.get('position', '?')}")
+        except FileNotFoundError as e:
+            print(f"WARNING: {e}")
+            print("Continuing without steering...")
+            steering_vector = None
+
+    print("Loading validation data...")
+    situations = load_situations(args.val_csv, args.num_situations)
 
     print(f"Evaluating on {len(situations)} situations with PERMISSIVE parser...")
     print(f"Temperature: {args.temperature} ({'deterministic' if args.temperature == 0 else 'sampling'})")
     print(f"Max time per generation: {args.max_time_per_generation}s")
+    if steering_vector is not None:
+        print(f"Activation steering: ENABLED (alpha={args.alpha}, layer={steering_layer})")
+    else:
+        print(f"Activation steering: disabled")
     print(f"Saving CoT responses: {'NO (--no_save_responses)' if args.no_save_responses else 'YES (default)'}")
     print(f"Results will be saved incrementally to: {args.output}")
     print()
 
-    results = []
-    failed_responses = []
-    generation_times = []
-    eval_start_time = time.time()
+    eval_result = run_evaluation(
+        model, tokenizer, situations, steering_vector,
+        alpha=args.alpha, steering_layer=steering_layer,
+        temperature=args.temperature, max_new_tokens=args.max_new_tokens,
+        max_time_per_generation=args.max_time_per_generation,
+        disable_thinking=args.disable_thinking,
+        no_save_responses=args.no_save_responses,
+        verbose=True,
+        incremental_save_path=args.output,
+        incremental_save_args=args,
+    )
 
-    for i, sit in enumerate(situations):
-        sit_start = time.time()
-
-        prompt = remove_instruction_suffix(sit["prompt"])
-        messages = [{"role": "user", "content": prompt}]
-
-        # Apply chat template (disable thinking for Qwen3 base models)
-        template_kwargs = {"tokenize": False, "add_generation_prompt": True}
-        if args.disable_thinking:
-            template_kwargs["enable_thinking"] = False
-        text = tokenizer.apply_chat_template(messages, **template_kwargs)
-
-        inputs = tokenizer(text, return_tensors="pt").to(model.device)
-
-        gen_start = time.time()
-        with torch.no_grad():
-            if args.temperature == 0:
-                # Deterministic generation
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=args.max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=tokenizer.eos_token_id,
-                    max_time=args.max_time_per_generation
-                )
-            else:
-                # Sampling with temperature
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=args.max_new_tokens,
-                    temperature=args.temperature,
-                    do_sample=True,
-                    pad_token_id=tokenizer.eos_token_id,
-                    max_time=args.max_time_per_generation
-                )
-        gen_elapsed = time.time() - gen_start
-
-        response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-        num_generated_tokens = outputs[0].shape[0] - inputs["input_ids"].shape[1]
-        choice = extract_choice_permissive(response, sit["num_options"])
-
-        if choice and choice in sit["options"]:
-            option_type = sit["options"][choice]["type"]
-            results.append({
-                "situation_id": sit["situation_id"],
-                "choice": choice,
-                "option_type": option_type,
-                "is_cooperate": option_type == "Cooperate",
-                "is_rebel": option_type == "Rebel",
-                "is_steal": option_type == "Steal",
-                "is_best_cara": sit["options"][choice]["is_best_cara"],
-                "response": None if args.no_save_responses else response,
-                "response_length": len(response),
-                "num_tokens_generated": int(num_generated_tokens),
-                "generation_time_seconds": round(gen_elapsed, 1)
-            })
-        else:
-            results.append({
-                "situation_id": sit["situation_id"],
-                "choice": None,
-                "option_type": None,
-                "is_cooperate": None,
-                "is_rebel": None,
-                "is_steal": None,
-                "is_best_cara": None,
-                "response": None if args.no_save_responses else response,
-                "response_length": len(response),
-                "num_tokens_generated": int(num_generated_tokens),
-                "generation_time_seconds": round(gen_elapsed, 1)
-            })
-            failed_responses.append({
-                "situation_id": sit["situation_id"],
-                "num_options": sit["num_options"],
-                "response": response
-            })
-
-        generation_times.append(gen_elapsed)
-        sit_elapsed = time.time() - sit_start
-        avg_time = sum(generation_times) / len(generation_times)
-        remaining = avg_time * (len(situations) - i - 1)
-
-        # Print progress after every situation
-        status = "OK" if choice else "PARSE_FAIL"
-        print(f"  [{i+1}/{len(situations)}] sit_id={sit['situation_id']} | {status} | "
-              f"{int(num_generated_tokens)} tokens | {gen_elapsed:.1f}s | "
-              f"ETA: {remaining/60:.1f}min")
-
-        # Warn if generation was very slow (possible hang)
-        if gen_elapsed > 60:
-            print(f"  WARNING: Generation took {gen_elapsed:.0f}s (>{60}s). "
-                  f"Model may be generating excessively long output.")
-        if int(num_generated_tokens) >= args.max_new_tokens - 10:
-            print(f"  WARNING: Hit token limit ({args.max_new_tokens}). "
-                  f"Response may be truncated. Consider --max_new_tokens increase.")
-
-        # Save incrementally after every situation
-        save_incremental(args.output, args, results, failed_responses, i + 1)
-
-    # Final summary
-    total_elapsed = time.time() - eval_start_time
+    results = eval_result["results"]
+    failed_responses = eval_result["failed_responses"]
+    generation_times = eval_result["generation_times"]
+    total_elapsed = eval_result["total_elapsed"]
     valid = [r for r in results if r["is_cooperate"] is not None]
-    if valid:
-        cooperate_rate = sum(r["is_cooperate"] for r in valid) / len(valid)
-        rebel_rate = sum(r["is_rebel"] for r in valid) / len(valid)
-        steal_rate = sum(r["is_steal"] for r in valid) / len(valid)
-        cara_rate = sum(r["is_best_cara"] for r in valid) / len(valid)
-    else:
-        cooperate_rate = rebel_rate = steal_rate = cara_rate = 0
-
-    parse_rate = len(valid) / len(results) if results else 0
 
     print(f"\n{'='*50}")
     print("EVALUATION RESULTS (Permissive Parser)")
     print("="*50)
     print(f"Total situations: {len(situations)}")
-    print(f"Valid responses: {len(valid)} ({100*parse_rate:.1f}%)")
+    print(f"Valid responses: {len(valid)} ({100*eval_result['parse_rate']:.1f}%)")
     print(f"Failed to parse: {len(failed_responses)}")
-    print(f"\n% choosing COOPERATE: {100*cooperate_rate:.1f}%")
-    print(f"% choosing REBEL:     {100*rebel_rate:.1f}%")
-    print(f"% choosing STEAL:     {100*steal_rate:.1f}%")
-    print(f"% choosing best CARA: {100*cara_rate:.1f}%")
+    print(f"\n% choosing COOPERATE: {100*eval_result['cooperate_rate']:.1f}%")
+    print(f"% choosing REBEL:     {100*eval_result['rebel_rate']:.1f}%")
+    print(f"% choosing STEAL:     {100*eval_result['steal_rate']:.1f}%")
+    print(f"% choosing best CARA: {100*eval_result['cara_rate']:.1f}%")
     print(f"\nTotal time: {total_elapsed/60:.1f} minutes ({total_elapsed:.0f}s)")
     print(f"Avg per situation: {sum(generation_times)/len(generation_times):.1f}s")
     print(f"Avg tokens generated: {sum(r.get('num_tokens_generated', 0) for r in results)/len(results):.0f}")
