@@ -3,3 +3,5 @@ transformers>=4.35.0
 pandas>=2.0.0
 peft>=0.6.0
 accelerate>=0.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
