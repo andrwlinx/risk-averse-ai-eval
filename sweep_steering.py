@@ -43,8 +43,15 @@ DEFAULT_LAYERS = [10, 12, 14]
 DEFAULT_ALPHAS = [-10.0, -5.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 10.0]
 
 
+def layer_label(L):
+    """Return a string label for a layer spec (int or list of ints)."""
+    if isinstance(L, (list, tuple)):
+        return "+".join(str(l) for l in L)
+    return str(L)
+
+
 def plot_sweep(results, base_ra, layer_candidates, output_path):
-    """Plot steering performance grid across layers."""
+    """Plot steering performance grid across layers (single or multilayer)."""
     df_plot = pd.DataFrame(results)
 
     num_layers = len(layer_candidates)
@@ -64,14 +71,16 @@ def plot_sweep(results, base_ra, layer_candidates, output_path):
 
     for i, L in enumerate(layer_candidates):
         ax = axes_flat[i]
-        layer_data = df_plot[df_plot["layer"] == L].sort_values("alpha")
+        lbl = layer_label(L)
+        layer_data = df_plot[df_plot["layer_label"] == lbl].sort_values("alpha")
         ax.plot(layer_data["alpha"], layer_data["safe_acc"],
                 marker="o", label="Safe Acc", color="green")
         ax.plot(layer_data["alpha"], layer_data["risky_acc"],
                 marker="x", label="Risky Acc", color="red")
         ax.axhline(y=base_ra, color="gray", linestyle="--", alpha=0.5,
                    label=f"Base Safe ({base_ra:.0%})")
-        ax.set_title(f"Layer {L}")
+        title = f"Layers {lbl}" if "+" in lbl else f"Layer {lbl}"
+        ax.set_title(title)
         ax.set_xlabel("Alpha")
         ax.set_ylabel("Accuracy")
         ax.set_ylim(-0.05, 1.05)
@@ -123,9 +132,20 @@ def main():
                         help="Alpha values (default: 0 0.5 1 1.5 2 3 5 8 10)")
     parser.add_argument("--output_prefix", type=str, default=None,
                         help="Output prefix for PNG and JSON files")
+    parser.add_argument("--filter_bucket_label", type=str, default=None,
+                        help="Filter situations to only this bucket label (e.g. 'lin_only')")
+    parser.add_argument("--multilayer_combos", type=str, nargs="*", default=None,
+                        help="Multilayer injection combos, each as comma-separated layer indices "
+                             "(e.g. '10,14' '14,18,22'). Added alongside single-layer candidates.")
     args = parser.parse_args()
 
-    LAYER_CANDIDATES = args.layers or DEFAULT_LAYERS
+    single_layers = args.layers or DEFAULT_LAYERS
+    multilayer = []
+    if args.multilayer_combos:
+        for combo_str in args.multilayer_combos:
+            combo = [int(x) for x in combo_str.split(",")]
+            multilayer.append(combo)
+    LAYER_CANDIDATES = single_layers + multilayer
     ALPHAS = args.alphas or DEFAULT_ALPHAS
 
     # Generate output prefix
@@ -168,13 +188,15 @@ def main():
 
     model.eval()
 
-    # Validate layer candidates
+    # Validate layer candidates (single ints and multilayer combos)
     num_model_layers = len(model.model.layers)
     for L in LAYER_CANDIDATES:
-        if L >= num_model_layers:
-            print(f"ERROR: Layer {L} >= model layer count ({num_model_layers}). "
-                  f"Valid range: 0-{num_model_layers - 1}")
-            sys.exit(1)
+        check_layers = L if isinstance(L, list) else [L]
+        for l in check_layers:
+            if l >= num_model_layers:
+                print(f"ERROR: Layer {l} >= model layer count ({num_model_layers}). "
+                      f"Valid range: 0-{num_model_layers - 1}")
+                sys.exit(1)
 
     # Auto-enable disable_thinking for base model evaluation
     if args.model_path is None and not args.disable_thinking:
@@ -190,8 +212,10 @@ def main():
 
     # --- Load data (once) ---
     print("Loading validation data...")
-    situations = load_situations(args.val_csv, args.num_situations)
-    print(f"Loaded {len(situations)} situations")
+    situations = load_situations(args.val_csv, args.num_situations,
+                                 filter_bucket_label=args.filter_bucket_label)
+    print(f"Loaded {len(situations)} situations"
+          + (f" (filtered to '{args.filter_bucket_label}')" if args.filter_bucket_label else ""))
 
     # --- Run baseline (no steering) ---
     print("\nRunning baseline (no steering)...")
@@ -219,7 +243,8 @@ def main():
 
     for combo_idx, (L, alpha) in enumerate(itertools.product(LAYER_CANDIDATES, ALPHAS)):
         combo_start = time.time()
-        print(f"[{combo_idx + 1}/{total_combos}] Layer={L}, Alpha={alpha} ...", end=" ", flush=True)
+        lbl = layer_label(L)
+        print(f"[{combo_idx + 1}/{total_combos}] Layer(s)={lbl}, Alpha={alpha} ...", end=" ", flush=True)
 
         eval_result = run_evaluation(
             model, tokenizer, situations, steering_vector,
@@ -235,7 +260,8 @@ def main():
         combo_elapsed = time.time() - combo_start
 
         sweep_results.append({
-            "layer": L,
+            "layer_label": lbl,
+            "layer": L if isinstance(L, int) else list(L),
             "alpha": alpha,
             "safe_acc": safe_acc,
             "risky_acc": risky_acc,
@@ -260,8 +286,9 @@ def main():
         "steering_path": args.steering_path,
         "val_csv": args.val_csv,
         "num_situations": args.num_situations,
+        "filter_bucket_label": args.filter_bucket_label,
         "temperature": args.temperature,
-        "layer_candidates": LAYER_CANDIDATES,
+        "layer_candidates": [L if isinstance(L, int) else list(L) for L in LAYER_CANDIDATES],
         "alphas": ALPHAS,
         "timestamp": datetime.now().isoformat(),
         "total_sweep_time_seconds": round(total_sweep_time, 1),
