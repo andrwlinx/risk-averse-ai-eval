@@ -71,43 +71,78 @@ def remove_instruction_suffix(prompt):
 
 
 def extract_choice_permissive(response, num_options):
-    response_lower = response.lower().strip()
+    response_lower = response.lower()
+    response_lower = response_lower.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
+    response_lower = re.sub(r"[*_`]+", "", response_lower)
+    response_lower = response_lower.rstrip()
+    tail_text = response_lower[-2500:] if len(response_lower) > 2500 else response_lower
+
     valid_letters = [chr(ord('a') + i) for i in range(num_options)]
     valid_numbers = [str(i + 1) for i in range(num_options)]
-    valid_options = valid_letters + valid_numbers
+    valid_options = set(valid_letters + valid_numbers)
 
-    json_match = re.search(r'\{"answer"\s*:\s*"([a-z0-9]+)"\}', response_lower)
-    if json_match and json_match.group(1) in valid_options:
-        return json_match.group(1)
+    def _last_match(pattern, text=None):
+        haystack = tail_text if text is None else text
+        matches = list(re.finditer(pattern, haystack))
+        for m in reversed(matches):
+            opt = m.group(1).strip()
+            if opt in valid_options:
+                return opt
+        return None
 
-    answer_match = re.search(r'(?:the\s+)?answer[:\s]+(?:is\s+)?(?:option\s+)?([a-z0-9])\b', response_lower)
-    if answer_match and answer_match.group(1) in valid_options:
-        return answer_match.group(1)
+    # 1. JSON format: {"answer": "X"}
+    json_choice = _last_match(
+        r'\{\s*["\']answer["\']\s*:\s*["\']?\s*([a-z0-9]+)\s*["\']?\s*\}', response_lower
+    )
+    if json_choice:
+        return json_choice
 
-    choice_match = re.search(r"(?:i(?:'d)?\s+)?(?:choose|select|pick|chose|selected|picking)\s+(?:option\s+)?([a-z0-9])\b", response_lower)
-    if choice_match and choice_match.group(1) in valid_options:
-        return choice_match.group(1)
+    # 2. LaTeX boxed: \boxed{a}
+    boxed_choice = _last_match(r'\\boxed\s*\{\s*([a-z0-9]+)\s*\}', response_lower)
+    if boxed_choice:
+        return boxed_choice
 
-    last_part = response_lower[-300:]
-    option_match = re.search(r'\boption\s+([a-z0-9])\b', last_part)
-    if option_match and option_match.group(1) in valid_options:
-        return option_match.group(1)
+    # 3. Explicit answer markers near the end
+    answer_choice = _last_match(
+        r'(?:final\s+answer|final|answer|my\s+answer|choice)\s*[:\-]?\s*(?:is\s+)?(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?'
+        r'(?=\s*(?:$|[\n\r\.\,\;\:\!\)]|\b(?:because|as|since|for)\b))'
+    )
+    if answer_choice:
+        return answer_choice
 
-    paren_matches = re.findall(r'\(([a-z0-9])\)', last_part)
-    for match in reversed(paren_matches):
-        if match in valid_options:
-            return match
+    # 4. Decision verbs
+    choice_choice = _last_match(
+        r"(?:i(?:'d)?\s+)?(?:would\s+)?(?:choose|select|pick|chose|selected|picking|opt\s+for|go\s+with|prefer|recommend|suggest)"
+        r"\s+(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?"
+        r"(?=\s*(?:$|[\n\r\.\,\;\:\!\)]|\b(?:because|as|since|for)\b))"
+    )
+    if choice_choice:
+        return choice_choice
 
-    last_150 = response_lower[-150:]
-    last_found = None
-    for opt in valid_options:
-        matches = list(re.finditer(r'\b' + re.escape(opt) + r'\b', last_150))
-        if matches:
-            last_pos = matches[-1].start()
-            if last_found is None or last_pos > last_found[1]:
-                last_found = (opt, last_pos)
-    if last_found:
-        return last_found[0]
+    # 5. "Option X is best/most attractive" style conclusions
+    option_is_choice = _last_match(
+        r'\boption\s*[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\s+(?:is|seems|looks|appears|has)\s+'
+        r'(?:the\s+)?(?:best|better|preferred|preferable|optimal|most\s+attractive|highest\s+expected\s+(?:utility|value))\b'
+    )
+    if option_is_choice:
+        return option_is_choice
+
+    # 6. Short final answer line
+    lines = [line.strip() for line in tail_text.splitlines() if line.strip()]
+    for line in reversed(lines[-6:]):
+        if len(line) > 30:
+            continue
+        m = re.fullmatch(
+            r'(?:final\s+answer|final|answer|choice)?\s*[:\-]?\s*(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\.?',
+            line
+        )
+        if m and m.group(1) in valid_options:
+            return m.group(1)
+
+    # 7. Entire response is just the option
+    compact = re.sub(r'\s+', '', response_lower)
+    if compact in valid_options:
+        return compact
 
     return None
 

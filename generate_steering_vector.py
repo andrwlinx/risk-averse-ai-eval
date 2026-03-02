@@ -19,6 +19,21 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+def inject_concise_instruction(text, instruction):
+    """Inject a concise instruction into the user turn of a formatted chat text.
+
+    Looks for the Qwen-style '<|im_start|>user\\n' marker and inserts the
+    instruction at the start of the user content. Falls back to prepending
+    to the full text if the marker is not found.
+    """
+    marker = "<|im_start|>user\n"
+    if marker in text:
+        idx = text.find(marker) + len(marker)
+        return text[:idx] + instruction + "\n" + text[idx:]
+    # Fallback: prepend to the full text
+    return instruction + "\n" + text
+
+
 def find_think_token_position(tokenizer, input_ids):
     """Find the position of the <think> token in the input.
 
@@ -168,6 +183,12 @@ def main():
         default="rejected_full",
         help="Column containing risk-neutral (rejected) CoT text (default: 'rejected_full')"
     )
+    parser.add_argument(
+        "--concise_prompt",
+        action="store_true",
+        help="Inject 'Be concise' into the user turn of each CoT text before extracting activations, "
+             "so the derived vector captures 'Concise Risk-Aversion'."
+    )
     args = parser.parse_args()
 
     # Check if training file exists
@@ -214,6 +235,8 @@ def main():
 
     print(f"\nUsing {num_pairs} pairs for steering vector computation")
     print(f"Extracting activations from layer {args.layer} at position '{args.position}'")
+    if args.concise_prompt:
+        print("Concise prompt injection: ENABLED (injecting 'Be concise' into user turn)")
 
     # Load model
     print(f"\nLoading model: {args.base_model}...")
@@ -238,19 +261,29 @@ def main():
     vector_diffs = []
     skipped = 0
 
+    concise_instruction = "Be concise and go straight to the answer after your thinking process."
+
     for i, (averse_cot, neutral_cot) in enumerate(tqdm(
         zip(averse_cots, neutral_cots),
         total=num_pairs,
         desc="Computing activation differences"
     )):
+        # Optionally inject concise instruction into the user turn
+        if args.concise_prompt:
+            averse_text = inject_concise_instruction(averse_cot, concise_instruction)
+            neutral_text = inject_concise_instruction(neutral_cot, concise_instruction)
+        else:
+            averse_text = averse_cot
+            neutral_text = neutral_cot
+
         # Get activations for risk-averse CoT
         act_averse = get_activations_at_position(
-            model, tokenizer, averse_cot, args.layer, args.position
+            model, tokenizer, averse_text, args.layer, args.position
         )
 
         # Get activations for risk-neutral CoT
         act_neutral = get_activations_at_position(
-            model, tokenizer, neutral_cot, args.layer, args.position
+            model, tokenizer, neutral_text, args.layer, args.position
         )
 
         if act_averse is None or act_neutral is None:
@@ -284,7 +317,8 @@ def main():
         "filter_value": args.filter_value,
         "averse_column": args.averse_column,
         "neutral_column": args.neutral_column,
-        "hidden_size": steering_vector.shape[0]
+        "hidden_size": steering_vector.shape[0],
+        "concise_prompt": args.concise_prompt,
     }
 
     torch.save(save_data, args.output)
