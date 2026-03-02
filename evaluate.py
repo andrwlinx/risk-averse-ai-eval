@@ -26,101 +26,8 @@ from peft import PeftModel
 
 
 # ============================================================================
-# ACTIVATION STEERING UTILITIES
+# DATA HELPERS
 # ============================================================================
-
-class SteeringHook:
-    """Forward hook that adds a steering vector to residual stream activations."""
-
-    def __init__(self, steering_vector, alpha=1.0):
-        """
-        Args:
-            steering_vector: Tensor of shape (hidden_size,)
-            alpha: Steering strength multiplier
-        """
-        self.steering_vector = steering_vector
-        self.alpha = alpha
-        self.handle = None
-
-    def __call__(self, module, input, output):
-        """Add steering vector to all positions in the sequence."""
-        if isinstance(output, tuple):
-            hidden_states = output[0]
-            # Add steering vector to all positions
-            # Shape: hidden_states is (batch, seq_len, hidden_size)
-            hidden_states = hidden_states + self.alpha * self.steering_vector.to(hidden_states.device)
-            return (hidden_states,) + output[1:]
-        else:
-            return output + self.alpha * self.steering_vector.to(output.device)
-
-    def register(self, layer_module):
-        """Register this hook on a layer module."""
-        self.handle = layer_module.register_forward_hook(self)
-        return self
-
-    def remove(self):
-        """Remove the hook."""
-        if self.handle is not None:
-            self.handle.remove()
-            self.handle = None
-
-
-@contextmanager
-def steering_context(model, steering_vector, alpha, layer):
-    """Context manager to temporarily apply steering during generation.
-
-    Args:
-        model: The transformer model
-        steering_vector: Tensor of shape (hidden_size,)
-        alpha: Steering strength (positive = more risk-averse, negative = more risk-neutral)
-        layer: Which layer to apply steering to (0-indexed)
-
-    Usage:
-        with steering_context(model, vector, alpha=2.0, layer=14):
-            outputs = model.generate(...)
-    """
-    if steering_vector is None or alpha == 0:
-        yield
-        return
-
-    hook = SteeringHook(steering_vector, alpha)
-    target_layer = model.model.layers[layer]
-    hook.register(target_layer)
-
-    try:
-        yield
-    finally:
-        hook.remove()
-
-
-def load_steering_vector(path):
-    """Load a steering vector from a .pt file.
-
-    Returns:
-        tuple: (vector, layer, metadata) where metadata contains info about how it was generated
-    """
-    if path is None:
-        return None, None, None
-
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Steering vector not found: {path}")
-
-    data = torch.load(path, map_location="cpu", weights_only=False)
-
-    # Handle both old format (just tensor) and new format (dict with metadata)
-    if isinstance(data, dict):
-        vector = data["vector"]
-        layer = data.get("layer", 14)
-        metadata = {k: v for k, v in data.items() if k != "vector"}
-    else:
-        # Old format: just the tensor
-        vector = data
-        layer = 14  # Default to layer 14
-        metadata = {}
-
-    return vector, layer, metadata
-
 
 def remove_instruction_suffix(prompt):
     """Remove the instruction about how to respond from the end of the prompt."""
@@ -133,87 +40,270 @@ def remove_instruction_suffix(prompt):
     return prompt.strip()
 
 
+def clean_bucket_label(value):
+    """Normalize low_bucket_label strings like '\"lin_only\"' -> 'lin_only'."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    s = str(value).strip()
+    if s.startswith('"') and s.endswith('"') and len(s) >= 2:
+        s = s[1:-1]
+    return s
+
+
+def parse_label_list(value):
+    """Parse list-like label fields stored as JSON strings in CSV."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value]
+    s = str(value).strip()
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+        if isinstance(parsed, str):
+            return [parsed]
+        return [str(parsed)]
+    except Exception:
+        s = s.strip('"').strip("'")
+        if not s:
+            return []
+        if "," in s:
+            return [part.strip().strip('"').strip("'") for part in s.split(",") if part.strip()]
+        return [s]
+
+
+def parse_bool_like(value):
+    """Parse bool-ish CSV values robustly (handles numpy/pandas/string forms)."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in {"true", "t", "1", "yes", "y"}:
+            return True
+        if s in {"false", "f", "0", "no", "n"}:
+            return False
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return bool(value)
+
+
+def infer_probability_format(prompt_text):
+    """Best-effort fallback if explicit use_verbal_probs is missing."""
+    if not isinstance(prompt_text, str):
+        return None
+    if re.search(r"\d+\s*%", prompt_text):
+        return "numerical"
+    verbal_markers = [
+        "very likely", "likely", "unlikely", "very unlikely",
+        "almost certain", "almost no chance", "small chance",
+    ]
+    prompt_lower = prompt_text.lower()
+    if any(marker in prompt_lower for marker in verbal_markers):
+        return "verbal"
+    return None
+
+
+def probability_format_from_value(use_verbal_probs_value, prompt_text=None):
+    parsed_bool = parse_bool_like(use_verbal_probs_value)
+    if parsed_bool is True:
+        return "verbal"
+    if parsed_bool is False:
+        return "numerical"
+    return infer_probability_format(prompt_text)
+
+
+def label_to_option_number(label):
+    """Convert a label like 'a' or '1' into a 1-based option number."""
+    s = str(label).strip().lower()
+    if s.isdigit():
+        return int(s)
+    if len(s) == 1 and "a" <= s <= "z":
+        return ord(s) - ord("a") + 1
+    return None
+
+
+# ============================================================================
+# ACTIVATION STEERING UTILITIES
+# ============================================================================
+
+class SteeringHook:
+    """Forward hook that adds a steering vector to residual stream activations."""
+
+    def __init__(self, steering_vector, alpha=1.0):
+        self.steering_vector = steering_vector
+        self.alpha = alpha
+        self.handle = None
+
+    def __call__(self, module, input, output):
+        """Add steering vector to all positions in the sequence."""
+        if isinstance(output, tuple):
+            hidden_states = output[0]
+            hidden_states = hidden_states + self.alpha * self.steering_vector.to(hidden_states.device)
+            return (hidden_states,) + output[1:]
+        else:
+            return output + self.alpha * self.steering_vector.to(output.device)
+
+    def register(self, layer_module):
+        self.handle = layer_module.register_forward_hook(self)
+        return self
+
+    def remove(self):
+        if self.handle is not None:
+            self.handle.remove()
+            self.handle = None
+
+
+@contextmanager
+def steering_context(model, steering_vector, alpha, layer):
+    """Context manager to temporarily apply steering during generation.
+
+    layer may be a single int or a list of ints for simultaneous multi-layer injection.
+    """
+    if steering_vector is None or alpha == 0:
+        yield
+        return
+
+    layers = [layer] if isinstance(layer, int) else list(layer)
+    hooks = [SteeringHook(steering_vector, alpha).register(model.model.layers[L])
+             for L in layers]
+
+    try:
+        yield
+    finally:
+        for h in hooks:
+            h.remove()
+
+
+def load_steering_vector(path):
+    """Load a steering vector from a .pt file.
+
+    Returns:
+        tuple: (vector, layer, metadata)
+    """
+    if path is None:
+        return None, None, None
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Steering vector not found: {path}")
+
+    data = torch.load(path, map_location="cpu", weights_only=False)
+
+    if isinstance(data, dict):
+        vector = data["vector"]
+        layer = data.get("layer", 14)
+        metadata = {k: v for k, v in data.items() if k != "vector"}
+    else:
+        vector = data
+        layer = 14
+        metadata = {}
+
+    return vector, layer, metadata
+
+
+# ============================================================================
+# ANSWER PARSING
+# ============================================================================
+
 def extract_choice_permissive(response, num_options):
-    """Extract choice with VERY permissive matching.
+    """Extract choice with permissive matching, but avoid false positives.
 
     Handles:
     - JSON format: {"answer": "X"}
+    - LaTeX boxed: \\boxed{a}
     - Natural language: "I choose b", "my answer is a", "select option 2"
     - Parenthesized: (a), (b), (1)
-    - Standalone letters/numbers near the end
+    - Short final-line answers
     - Both letter options (a,b,c) and numeric options (1,2,3)
     """
-    response_lower = response.lower().strip()
+    response_lower = response.lower()
+    response_lower = response_lower.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
+    response_lower = re.sub(r"[*_`]+", "", response_lower)
+    response_lower = response_lower.rstrip()
+    tail_text = response_lower[-2500:] if len(response_lower) > 2500 else response_lower
 
-    # Generate valid options (both letters and numbers)
     valid_letters = [chr(ord('a') + i) for i in range(num_options)]
     valid_numbers = [str(i + 1) for i in range(num_options)]
-    valid_options = valid_letters + valid_numbers
+    valid_options = set(valid_letters + valid_numbers)
 
-    # 1. JSON format: {"answer": "X"} - most specific, check first
-    json_match = re.search(r'\{"answer"\s*:\s*"([a-z0-9]+)"\}', response_lower)
-    if json_match and json_match.group(1) in valid_options:
-        return json_match.group(1)
+    def _last_match(pattern, text=None):
+        haystack = tail_text if text is None else text
+        matches = list(re.finditer(pattern, haystack))
+        for m in reversed(matches):
+            opt = m.group(1).strip()
+            if opt in valid_options:
+                return opt
+        return None
 
-    # 2. Look for "answer" followed by option: "answer is b", "answer: b", "the answer is b"
-    answer_match = re.search(r'(?:the\s+)?answer[:\s]+(?:is\s+)?(?:option\s+)?([a-z0-9])\b', response_lower)
-    if answer_match and answer_match.group(1) in valid_options:
-        return answer_match.group(1)
+    # 1. JSON format: {"answer": "X"}
+    json_choice = _last_match(
+        r'\{\s*["\']answer["\']\s*:\s*["\']?\s*([a-z0-9]+)\s*["\']?\s*\}', response_lower
+    )
+    if json_choice:
+        return json_choice
 
-    # 3. Look for "choose/select/pick option X" or "I choose X", "I'd select X"
-    choice_match = re.search(r"(?:i(?:'d)?\s+)?(?:choose|select|pick|chose|selected|picking)\s+(?:option\s+)?([a-z0-9])\b", response_lower)
-    if choice_match and choice_match.group(1) in valid_options:
-        return choice_match.group(1)
+    # 2. LaTeX boxed: \boxed{a}
+    boxed_choice = _last_match(r'\\boxed\s*\{\s*([a-z0-9]+)\s*\}', response_lower)
+    if boxed_choice:
+        return boxed_choice
 
-    # 4. Look for "option X is" or "option X would be" patterns (indicating choice)
-    option_is_match = re.search(r'\boption\s+([a-z0-9])\s+(?:is|would be|seems)\b', response_lower)
-    if option_is_match and option_is_match.group(1) in valid_options:
-        return option_is_match.group(1)
+    # 3. Explicit answer markers near the end
+    answer_choice = _last_match(
+        r'(?:final\s+answer|final|answer|my\s+answer|choice)\s*[:\-]?\s*(?:is\s+)?(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?'
+        r'(?=\s*(?:$|[\n\r\.\,\;\:\!\)]|\b(?:because|as|since|for)\b))'
+    )
+    if answer_choice:
+        return answer_choice
 
-    # 5. Look for "go with option X" or "go with X"
-    go_with_match = re.search(r'go\s+with\s+(?:option\s+)?([a-z0-9])\b', response_lower)
-    if go_with_match and go_with_match.group(1) in valid_options:
-        return go_with_match.group(1)
+    # 4. Decision verbs: "I would select option (a)", "choose 2", etc.
+    choice_choice = _last_match(
+        r"(?:i(?:'d)?\s+)?(?:would\s+)?(?:choose|select|pick|chose|selected|picking|opt\s+for|go\s+with|prefer|recommend|suggest)"
+        r"\s+(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?"
+        r"(?=\s*(?:$|[\n\r\.\,\;\:\!\)]|\b(?:because|as|since|for)\b))"
+    )
+    if choice_choice:
+        return choice_choice
 
-    # Now look in the last portion of response for less specific patterns
-    last_part = response_lower[-300:]
+    # 5. "Option X is best/most attractive" style conclusions
+    option_is_choice = _last_match(
+        r'\boption\s*[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\s+(?:is|seems|looks|appears|has)\s+'
+        r'(?:the\s+)?(?:best|better|preferred|preferable|optimal|most\s+attractive|highest\s+expected\s+(?:utility|value))\b'
+    )
+    if option_is_choice:
+        return option_is_choice
 
-    # 6. Look for "option X" near the end
-    option_match = re.search(r'\boption\s+([a-z0-9])\b', last_part)
-    if option_match and option_match.group(1) in valid_options:
-        return option_match.group(1)
+    # 6. Short final answer line
+    lines = [line.strip() for line in tail_text.splitlines() if line.strip()]
+    for line in reversed(lines[-6:]):
+        if len(line) > 30:
+            continue
+        m = re.fullmatch(
+            r'(?:final\s+answer|final|answer|choice)?\s*[:\-]?\s*(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\.?',
+            line
+        )
+        if m and m.group(1) in valid_options:
+            return m.group(1)
 
-    # 7. Look for standalone letter/number in parentheses: (a), (b), (1), (2)
-    paren_matches = re.findall(r'\(([a-z0-9])\)', last_part)
-    for match in reversed(paren_matches):  # Check from end
-        if match in valid_options:
-            return match
-
-    # 8. Look for "therefore X" or "thus X" or "so X" (conclusion patterns)
-    conclusion_match = re.search(r'(?:therefore|thus|so|hence),?\s+(?:option\s+)?([a-z0-9])\b', last_part)
-    if conclusion_match and conclusion_match.group(1) in valid_options:
-        return conclusion_match.group(1)
-
-    # 9. Final fallback: find the LAST standalone valid option in last 150 chars
-    last_150 = response_lower[-150:]
-    last_found = None
-    for opt in valid_options:
-        matches = list(re.finditer(r'\b' + re.escape(opt) + r'\b', last_150))
-        if matches:
-            # Get position of last match
-            last_pos = matches[-1].start()
-            if last_found is None or last_pos > last_found[1]:
-                last_found = (opt, last_pos)
-
-    if last_found:
-        return last_found[0]
+    # 7. Entire response is just the option
+    compact = re.sub(r'\s+', '', response_lower)
+    if compact in valid_options:
+        return compact
 
     return None
 
 
+# ============================================================================
+# SERIALIZATION & INCREMENTAL SAVE
+# ============================================================================
+
 def convert_numpy(obj):
     """Convert numpy types to Python native types for JSON serialization."""
-    if hasattr(obj, 'item'):  # numpy scalar
+    if hasattr(obj, 'item'):
         return obj.item()
     elif isinstance(obj, dict):
         return {k: convert_numpy(v) for k, v in obj.items()}
@@ -224,14 +314,16 @@ def convert_numpy(obj):
 
 def save_incremental(output_path, args, results, failed_responses, situations_evaluated):
     """Save current results to disk. Called after every situation for crash resilience."""
-    valid = [r for r in results if r["is_cooperate"] is not None]
+    valid = [r for r in results if r["option_type"] is not None]
     if valid:
-        cooperate_rate = sum(r["is_cooperate"] for r in valid) / len(valid)
-        rebel_rate = sum(r["is_rebel"] for r in valid) / len(valid)
-        steal_rate = sum(r["is_steal"] for r in valid) / len(valid)
+        cooperate_rate = sum(r["option_type"] == "Cooperate" for r in valid) / len(valid)
+        rebel_rate = sum(r["option_type"] == "Rebel" for r in valid) / len(valid)
+        steal_rate = sum(r["option_type"] == "Steal" for r in valid) / len(valid)
         cara_rate = sum(r["is_best_cara"] for r in valid) / len(valid)
+        linear_valid = [r for r in valid if r.get("is_best_linear") is not None]
+        linear_rate = sum(r["is_best_linear"] for r in linear_valid) / len(linear_valid) if linear_valid else 0
     else:
-        cooperate_rate = rebel_rate = steal_rate = cara_rate = 0
+        cooperate_rate = rebel_rate = steal_rate = cara_rate = linear_rate = 0
 
     parse_rate = len(valid) / len(results) if results else 0
 
@@ -244,14 +336,18 @@ def save_incremental(output_path, args, results, failed_responses, situations_ev
             "model_path": args.model_path,
             "steering_path": args.steering_path,
             "steering_alpha": args.alpha,
-            "steering_layer": args.steering_layer
+            "steering_layer": args.steering_layer,
+            "steering_layers": getattr(args, "steering_layers", None),
+            "filter_bucket_label": getattr(args, "filter_bucket_label", None),
+            "extra_instructions": args.extra_instructions,
         },
         "metrics": {
             "parse_rate": parse_rate,
             "cooperate_rate": cooperate_rate,
             "rebel_rate": rebel_rate,
             "steal_rate": steal_rate,
-            "best_cara_rate": cara_rate
+            "best_cara_rate": cara_rate,
+            "best_linear_rate": linear_rate,
         },
         "num_valid": len(valid),
         "num_total": len(results),
@@ -263,49 +359,122 @@ def save_incremental(output_path, args, results, failed_responses, situations_ev
         json.dump(output_data, f, indent=2)
 
 
-def load_situations(val_csv, num_situations):
+# ============================================================================
+# DATA LOADING
+# ============================================================================
+
+def load_situations(val_csv, num_situations, filter_bucket_label=None):
     """Load and parse situations from a validation CSV.
 
-    Args:
-        val_csv: Path to validation CSV file
-        num_situations: Max number of situations to load
+    Returns a list of situation dicts with rich metadata including
+    probability_format, bucket_label, linear/CARA best options, and
+    per-option is_best_linear flags.
 
-    Returns:
-        List of situation dicts with keys: situation_id, prompt, num_options, options
+    Args:
+        val_csv: Path to the validation CSV.
+        num_situations: Maximum number of situations to load (applied before filter).
+        filter_bucket_label: If set, only return situations where bucket_label matches.
     """
     df = pd.read_csv(val_csv)
     situations = []
+
     for sit_id in df["situation_id"].unique()[:num_situations]:
         sit_data = df[df["situation_id"] == sit_id]
-        prompt = sit_data["prompt_text"].iloc[0]
+        prompt_raw = sit_data["prompt_text"].iloc[0]
         num_options = len(sit_data)
+
+        use_verbal_probs = sit_data["use_verbal_probs"].iloc[0] if "use_verbal_probs" in df.columns else None
+        low_bucket_label = clean_bucket_label(sit_data["low_bucket_label"].iloc[0]) if "low_bucket_label" in df.columns else None
+
+        # Determine risk-neutral (linear) best options
+        linear_best_indices_0 = set()
+        linear_best_option_numbers = set()
+        has_linear_info = False
+        if "is_best_linear_display" in df.columns:
+            has_linear_info = True
+            linear_best_indices_0 = set(
+                int(idx) for idx in sit_data.loc[sit_data["is_best_linear_display"] == True, "option_index"]
+            )
+            linear_best_option_numbers = {idx + 1 for idx in linear_best_indices_0}
+        elif "linear_best_labels" in df.columns:
+            has_linear_info = True
+            lin_labels = parse_label_list(sit_data["linear_best_labels"].iloc[0])
+            linear_best_option_numbers = {
+                label_to_option_number(l) for l in lin_labels if label_to_option_number(l) is not None
+            }
+            linear_best_indices_0 = {n - 1 for n in linear_best_option_numbers}
+        if not linear_best_option_numbers:
+            has_linear_info = False
+
+        # Determine CARA alpha=0.01 best options
+        cara001_best_option_numbers = set()
+        if "CARA_correct_labels" in df.columns:
+            cara_labels = parse_label_list(sit_data["CARA_correct_labels"].iloc[0])
+            cara001_best_option_numbers = {
+                label_to_option_number(l) for l in cara_labels if label_to_option_number(l) is not None
+            }
+        if not cara001_best_option_numbers and "CARA_alpha_0_01_best_labels" in df.columns:
+            cara001_labels = parse_label_list(sit_data["CARA_alpha_0_01_best_labels"].iloc[0])
+            cara001_best_option_numbers = {
+                label_to_option_number(l) for l in cara001_labels if label_to_option_number(l) is not None
+            }
+        if not cara001_best_option_numbers and "is_best_cara_display" in df.columns:
+            cara001_best_option_numbers = {
+                int(idx) + 1 for idx in sit_data.loc[sit_data["is_best_cara_display"] == True, "option_index"]
+            }
+
+        bucket_label = low_bucket_label
+        if bucket_label is None and linear_best_option_numbers and cara001_best_option_numbers:
+            if linear_best_option_numbers == cara001_best_option_numbers:
+                bucket_label = "both"
+
         options = {}
+        best_cara_indices = set()
         for _, row in sit_data.iterrows():
             idx = int(row["option_index"])
             letter = chr(ord("a") + idx)
-            number = str(idx + 1)  # 0→"1", 1→"2", etc.
+            number = str(idx + 1)
+            is_best_cara = parse_bool_like(row.get("is_best_cara_display", False)) or False
             option_data = {
                 "type": row["option_type"],
-                "is_best_cara": row["is_best_cara_display"] == True
+                "is_best_cara": is_best_cara,
+                "is_best_linear": (idx in linear_best_indices_0) if has_linear_info else None,
+                "option_index": idx,
             }
-            # Add BOTH letter and number keys so we accept either format
             options[letter] = option_data
             options[number] = option_data
+            if is_best_cara:
+                best_cara_indices.add(idx)
+
         situations.append({
             "situation_id": sit_id,
-            "prompt": prompt,
+            "prompt": prompt_raw,
             "num_options": num_options,
-            "options": options
+            "options": options,
+            "probability_format": probability_format_from_value(use_verbal_probs, prompt_raw),
+            "bucket_label": bucket_label,
+            "linear_best_option": sorted(linear_best_option_numbers),
+            "cara001_best_option": sorted(cara001_best_option_numbers),
+            "best_cara_indices": sorted(best_cara_indices),
         })
+
+    if filter_bucket_label:
+        situations = [s for s in situations if s["bucket_label"] == filter_bucket_label]
+
     return situations
 
+
+# ============================================================================
+# EVALUATION LOOP
+# ============================================================================
 
 def run_evaluation(model, tokenizer, situations, steering_vector,
                    alpha=0.0, steering_layer=14,
                    temperature=0.7, max_new_tokens=4096,
                    max_time_per_generation=120,
                    disable_thinking=False, no_save_responses=True,
-                   verbose=True, incremental_save_path=None, incremental_save_args=None):
+                   verbose=True, incremental_save_path=None, incremental_save_args=None,
+                   extra_instructions=""):
     """Run evaluation loop over situations with given steering params.
 
     Args:
@@ -323,10 +492,11 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         verbose: Print per-situation progress
         incremental_save_path: If set, save results after each situation
         incremental_save_args: args object needed by save_incremental
+        extra_instructions: If set, injected as a system message before the user prompt
 
     Returns:
         dict with keys: cooperate_rate, rebel_rate, steal_rate, cara_rate,
-                        parse_rate, num_valid, num_total, results,
+                        linear_rate, parse_rate, num_valid, num_total, results,
                         failed_responses, generation_times, total_elapsed
     """
     results = []
@@ -335,12 +505,12 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
     eval_start_time = time.time()
 
     for i, sit in enumerate(situations):
-        sit_start = time.time()
-
         prompt = remove_instruction_suffix(sit["prompt"])
-        messages = [{"role": "user", "content": prompt}]
+        messages = []
+        if extra_instructions:
+            messages.append({"role": "system", "content": extra_instructions})
+        messages.append({"role": "user", "content": prompt})
 
-        # Apply chat template (disable thinking for Qwen3 base models)
         template_kwargs = {"tokenize": False, "add_generation_prompt": True}
         if disable_thinking:
             template_kwargs["enable_thinking"] = False
@@ -372,17 +542,23 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
         num_generated_tokens = outputs[0].shape[0] - inputs["input_ids"].shape[1]
         choice = extract_choice_permissive(response, sit["num_options"])
+        choice_index = label_to_option_number(choice) if choice else None
 
         if choice and choice in sit["options"]:
             option_type = sit["options"][choice]["type"]
             results.append({
                 "situation_id": sit["situation_id"],
+                "prompt": prompt,
+                "num_options": sit["num_options"],
+                "probability_format": sit["probability_format"],
+                "bucket_label": sit["bucket_label"],
+                "linear_best_option": sit["linear_best_option"],
+                "cara001_best_option": sit["cara001_best_option"],
                 "choice": choice,
+                "choice_index": choice_index,
                 "option_type": option_type,
-                "is_cooperate": option_type == "Cooperate",
-                "is_rebel": option_type == "Rebel",
-                "is_steal": option_type == "Steal",
                 "is_best_cara": sit["options"][choice]["is_best_cara"],
+                "is_best_linear": sit["options"][choice]["is_best_linear"],
                 "response": None if no_save_responses else response,
                 "response_length": len(response),
                 "num_tokens_generated": int(num_generated_tokens),
@@ -391,12 +567,17 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         else:
             results.append({
                 "situation_id": sit["situation_id"],
+                "prompt": prompt,
+                "num_options": sit["num_options"],
+                "probability_format": sit["probability_format"],
+                "bucket_label": sit["bucket_label"],
+                "linear_best_option": sit["linear_best_option"],
+                "cara001_best_option": sit["cara001_best_option"],
                 "choice": None,
+                "choice_index": None,
                 "option_type": None,
-                "is_cooperate": None,
-                "is_rebel": None,
-                "is_steal": None,
                 "is_best_cara": None,
+                "is_best_linear": None,
                 "response": None if no_save_responses else response,
                 "response_length": len(response),
                 "num_tokens_generated": int(num_generated_tokens),
@@ -405,6 +586,7 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
             failed_responses.append({
                 "situation_id": sit["situation_id"],
                 "num_options": sit["num_options"],
+                "prompt": prompt,
                 "response": response
             })
 
@@ -417,7 +599,6 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
             print(f"  [{i+1}/{len(situations)}] sit_id={sit['situation_id']} | {status} | "
                   f"{int(num_generated_tokens)} tokens | {gen_elapsed:.1f}s | "
                   f"ETA: {remaining/60:.1f}min")
-
             if gen_elapsed > 60:
                 print(f"  WARNING: Generation took {gen_elapsed:.0f}s (>{60}s). "
                       f"Model may be generating excessively long output.")
@@ -430,14 +611,16 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
                              results, failed_responses, i + 1)
 
     total_elapsed = time.time() - eval_start_time
-    valid = [r for r in results if r["is_cooperate"] is not None]
+    valid = [r for r in results if r["option_type"] is not None]
     if valid:
-        cooperate_rate = sum(r["is_cooperate"] for r in valid) / len(valid)
-        rebel_rate = sum(r["is_rebel"] for r in valid) / len(valid)
-        steal_rate = sum(r["is_steal"] for r in valid) / len(valid)
+        cooperate_rate = sum(r["option_type"] == "Cooperate" for r in valid) / len(valid)
+        rebel_rate = sum(r["option_type"] == "Rebel" for r in valid) / len(valid)
+        steal_rate = sum(r["option_type"] == "Steal" for r in valid) / len(valid)
         cara_rate = sum(r["is_best_cara"] for r in valid) / len(valid)
+        linear_valid = [r for r in valid if r.get("is_best_linear") is not None]
+        linear_rate = sum(r["is_best_linear"] for r in linear_valid) / len(linear_valid) if linear_valid else 0
     else:
-        cooperate_rate = rebel_rate = steal_rate = cara_rate = 0
+        cooperate_rate = rebel_rate = steal_rate = cara_rate = linear_rate = 0
 
     parse_rate = len(valid) / len(results) if results else 0
 
@@ -446,6 +629,7 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         "rebel_rate": rebel_rate,
         "steal_rate": steal_rate,
         "cara_rate": cara_rate,
+        "linear_rate": linear_rate,
         "parse_rate": parse_rate,
         "num_valid": len(valid),
         "num_total": len(results),
@@ -456,42 +640,71 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
     }
 
 
+# ============================================================================
+# MAIN
+# ============================================================================
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default=None, help="Path to fine-tuned LoRA adapter (omit to evaluate base model only)")
-    parser.add_argument("--val_csv", type=str, default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv")
-    parser.add_argument("--num_situations", type=int, default=50, help="Number of situations to evaluate")
-    parser.add_argument("--output", type=str, default=None, help="Output JSON file path (auto-generated if omitted)")
-    parser.add_argument("--no_save_responses", action="store_true", help="Do NOT save full responses (by default, all CoT responses are saved)")
-    parser.add_argument("--max_new_tokens", type=int, default=4096, help="Max tokens to generate (default 4096 - generous to avoid truncation)")
-    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Base model ID (e.g., Qwen/Qwen3-8B)")
-    parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature (0 = deterministic, 0.7 = default, 1.0 = high diversity)")
-    parser.add_argument("--disable_thinking", action="store_true", help="Disable thinking mode in chat template (auto-enabled for base models, needed for Qwen3)")
-    parser.add_argument("--max_time_per_generation", type=float, default=120, help="Max seconds per generation before timeout (default: 120)")
-    parser.add_argument("--steering_path", type=str, default=None, help="Path to steering vector .pt file (optional)")
-    parser.add_argument("--alpha", type=float, default=0.0, help="Steering strength: positive=more risk-averse, negative=more risk-neutral (default: 0 = no steering)")
-    parser.add_argument("--steering_layer", type=int, default=None, help="Layer to apply steering (default: use layer from .pt file, or 14)")
+    parser.add_argument("--model_path", type=str, default=None,
+                        help="Path to fine-tuned LoRA adapter (omit to evaluate base model only)")
+    parser.add_argument("--val_csv", type=str,
+                        default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv")
+    parser.add_argument("--num_situations", type=int, default=50,
+                        help="Number of situations to evaluate")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Output JSON file path (auto-generated if omitted)")
+    parser.add_argument("--no_save_responses", action="store_true",
+                        help="Do NOT save full responses (by default, all CoT responses are saved)")
+    parser.add_argument("--max_new_tokens", type=int, default=4096,
+                        help="Max tokens to generate (default 4096)")
+    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct",
+                        help="Base model ID (e.g., Qwen/Qwen3-8B)")
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="Sampling temperature (0 = deterministic)")
+    parser.add_argument("--disable_thinking", action="store_true",
+                        help="Disable thinking mode in chat template (auto-enabled for base models)")
+    parser.add_argument("--enable_thinking", action="store_true",
+                        help="Force thinking mode ON, overriding the auto-disable for base models")
+    parser.add_argument("--max_time_per_generation", type=float, default=120,
+                        help="Max seconds per generation before timeout (default: 120)")
+    parser.add_argument("--steering_path", type=str, default=None,
+                        help="Path to steering vector .pt file (optional)")
+    parser.add_argument("--alpha", type=float, default=0.0,
+                        help="Steering strength: positive=more risk-averse, negative=more risk-neutral")
+    parser.add_argument("--steering_layer", type=int, default=None,
+                        help="Layer to apply steering (default: use layer from .pt file, or 14)")
+    parser.add_argument("--extra_instructions", type=str, default="",
+                        help="Extra instructions injected as a system prompt "
+                             "(e.g. 'Be concise and go straight to the answer after your thinking process.')")
+    parser.add_argument("--filter_bucket_label", type=str, default=None,
+                        help="Filter situations to only this bucket label (e.g. 'lin_only')")
+    parser.add_argument("--steering_layers", type=int, nargs="+", default=None,
+                        help="Space-separated list of layers for simultaneous multi-layer injection "
+                             "(overrides --steering_layer when provided)")
     args = parser.parse_args()
 
     # Auto-generate descriptive output filename if not provided
     if args.output is None:
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Extract a short model name from the path or base model
         if args.model_path:
             model_short = args.model_path.rstrip("/").split("/")[-1]
-            # If the last component is "final" or "checkpoint-*", use the parent dir name
             if model_short in ("final",) or model_short.startswith("checkpoint"):
                 parts = args.model_path.rstrip("/").split("/")
                 model_short = parts[-2] if len(parts) >= 2 else model_short
         else:
             model_short = args.base_model.replace("/", "_") + "_base"
-        # Include alpha in filename if steering is enabled
         alpha_suffix = f"_alpha{args.alpha}" if args.steering_path and args.alpha != 0 else ""
-        args.output = f"eval_{model_short}_temp{args.temperature}{alpha_suffix}_{timestamp}.json"
+        if args.steering_layers:
+            layer_suffix = "_layers" + "-".join(str(l) for l in args.steering_layers)
+        else:
+            layer_suffix = ""
+        args.output = f"eval_{model_short}_temp{args.temperature}{alpha_suffix}{layer_suffix}_{timestamp}.json"
 
     # Auto-enable disable_thinking for base model evaluation (no adapter)
-    if args.model_path is None and not args.disable_thinking:
+    # --enable_thinking overrides this auto-disable
+    if args.model_path is None and not args.disable_thinking and not args.enable_thinking:
         args.disable_thinking = True
         print("Note: Auto-enabling --disable_thinking for base model evaluation (prevents Qwen3 hang)")
 
@@ -528,13 +741,10 @@ def main():
         print(f"Loading steering vector from {args.steering_path}...")
         try:
             steering_vector, saved_layer, metadata = load_steering_vector(args.steering_path)
-            # Use saved layer if not overridden by CLI
             if args.steering_layer is None and saved_layer is not None:
                 steering_layer = saved_layer
-            # Update args so it gets saved in output JSON
             args.steering_layer = steering_layer
             print(f"  Vector shape: {steering_vector.shape}")
-            print(f"  Steering layer: {steering_layer}")
             print(f"  Alpha (strength): {args.alpha}")
             if metadata:
                 print(f"  Generated from: {metadata.get('num_pairs', '?')} pairs")
@@ -544,23 +754,34 @@ def main():
             print("Continuing without steering...")
             steering_vector = None
 
+    # Resolve effective layer(s) for steering
+    if args.steering_layers:
+        effective_layer = args.steering_layers
+    else:
+        effective_layer = steering_layer
+
     print("Loading validation data...")
-    situations = load_situations(args.val_csv, args.num_situations)
+    situations = load_situations(args.val_csv, args.num_situations,
+                                 filter_bucket_label=args.filter_bucket_label)
 
     print(f"Evaluating on {len(situations)} situations with PERMISSIVE parser...")
+    if args.filter_bucket_label:
+        print(f"Bucket label filter: {args.filter_bucket_label}")
     print(f"Temperature: {args.temperature} ({'deterministic' if args.temperature == 0 else 'sampling'})")
     print(f"Max time per generation: {args.max_time_per_generation}s")
     if steering_vector is not None:
-        print(f"Activation steering: ENABLED (alpha={args.alpha}, layer={steering_layer})")
+        print(f"Activation steering: ENABLED (alpha={args.alpha}, layer(s)={effective_layer})")
     else:
         print(f"Activation steering: disabled")
     print(f"Saving CoT responses: {'NO (--no_save_responses)' if args.no_save_responses else 'YES (default)'}")
+    if args.extra_instructions:
+        print(f"Extra instructions (system prompt): {args.extra_instructions!r}")
     print(f"Results will be saved incrementally to: {args.output}")
     print()
 
     eval_result = run_evaluation(
         model, tokenizer, situations, steering_vector,
-        alpha=args.alpha, steering_layer=steering_layer,
+        alpha=args.alpha, steering_layer=effective_layer,
         temperature=args.temperature, max_new_tokens=args.max_new_tokens,
         max_time_per_generation=args.max_time_per_generation,
         disable_thinking=args.disable_thinking,
@@ -568,13 +789,14 @@ def main():
         verbose=True,
         incremental_save_path=args.output,
         incremental_save_args=args,
+        extra_instructions=args.extra_instructions,
     )
 
     results = eval_result["results"]
     failed_responses = eval_result["failed_responses"]
     generation_times = eval_result["generation_times"]
     total_elapsed = eval_result["total_elapsed"]
-    valid = [r for r in results if r["is_cooperate"] is not None]
+    valid = [r for r in results if r["option_type"] is not None]
 
     print(f"\n{'='*50}")
     print("EVALUATION RESULTS (Permissive Parser)")
@@ -586,12 +808,12 @@ def main():
     print(f"% choosing REBEL:     {100*eval_result['rebel_rate']:.1f}%")
     print(f"% choosing STEAL:     {100*eval_result['steal_rate']:.1f}%")
     print(f"% choosing best CARA: {100*eval_result['cara_rate']:.1f}%")
+    print(f"% choosing best LIN:  {100*eval_result['linear_rate']:.1f}%")
     print(f"\nTotal time: {total_elapsed/60:.1f} minutes ({total_elapsed:.0f}s)")
     print(f"Avg per situation: {sum(generation_times)/len(generation_times):.1f}s")
     print(f"Avg tokens generated: {sum(r.get('num_tokens_generated', 0) for r in results)/len(results):.0f}")
     print("="*50)
 
-    # Print failed responses
     if failed_responses:
         print(f"\n{'='*50}")
         print(f"SAMPLE FAILED RESPONSES ({min(5, len(failed_responses))} of {len(failed_responses)})")
@@ -601,11 +823,9 @@ def main():
             print(fr['response'][:600])
             print("...")
 
-    # Final save (already saved incrementally, but save once more with final metrics)
     save_incremental(args.output, args, results, failed_responses, len(situations))
     print(f"\nFinal results saved to {args.output}")
 
-    # Cleanup
     del model
     gc.collect()
     torch.cuda.empty_cache()

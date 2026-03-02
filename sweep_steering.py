@@ -125,6 +125,8 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max_new_tokens", type=int, default=4096)
     parser.add_argument("--disable_thinking", action="store_true")
+    parser.add_argument("--enable_thinking", action="store_true",
+                        help="Force thinking mode ON, overriding the auto-disable for base models")
     parser.add_argument("--max_time_per_generation", type=float, default=120)
     parser.add_argument("--layers", type=int, nargs="+", default=None,
                         help="Layer candidates (default: 7 10 14 18 21 24)")
@@ -198,8 +200,8 @@ def main():
                       f"Valid range: 0-{num_model_layers - 1}")
                 sys.exit(1)
 
-    # Auto-enable disable_thinking for base model evaluation
-    if args.model_path is None and not args.disable_thinking:
+    # Auto-enable disable_thinking for base model evaluation (unless --enable_thinking overrides)
+    if args.model_path is None and not args.disable_thinking and not args.enable_thinking:
         args.disable_thinking = True
         print("Note: Auto-enabling --disable_thinking for base model evaluation")
 

@@ -39,7 +39,8 @@ ENV/
 *.json
 !example_results.json
 !sweep_*.json
-results/
+!results/**/*.json
+!results/**/*.png
 outputs/
 logs/
 
