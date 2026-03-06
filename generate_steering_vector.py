@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-Generate steering vectors for activation engineering.
+Generate steering vectors or in-context vectors (ICVs) for activation engineering.
 
-Contrasts Risk-Averse (010_only) vs Risk-Neutral (lin_only) chain-of-thought
-activations at the token following <think> to derive a steering direction.
+Two modes:
+  Default (contrastive CoT): Contrasts risk-averse vs risk-neutral chain-of-thought
+  activations at the token following <think>, using only lin_only situations.
+
+  ICV mode (--icv_mode): Measures the activation shift caused by prepending
+  risk-averse demonstrations to a situation prompt, capturing "what the model's
+  state looks like when primed with risk-averse examples."
 
 Uses transformers library for compatibility with evaluate.py.
 """
 
 import argparse
 import gc
+import re
 import sys
 from pathlib import Path
 
@@ -35,32 +41,29 @@ def inject_concise_instruction(text, instruction):
 
 
 def find_think_token_position(tokenizer, input_ids):
-    """Find the position of the <think> token in the input.
+    """Find the position of the last <think> token sequence in input_ids.
 
-    Returns the position of <think> token, or -1 if not found.
-    We want activations at the token AFTER <think>.
+    Returns the index of the final token of the last match, or -1 if not found.
+    Caller should use last_pos + 1 as the activation position.
     """
-    # Common think token patterns
-    think_patterns = ["<think>", "<|think|>", "▁<think>", " <think>"]
+    think_patterns = ["<think>", "<|think|>", " <think>"]
+    seqs = []
+    for p in think_patterns:
+        ids = tokenizer.encode(p, add_special_tokens=False)
+        if ids:
+            seqs.append(ids)
+    # Also check single special token representation
+    tid = tokenizer.convert_tokens_to_ids("<think>")
+    if tid is not None and tid != tokenizer.unk_token_id:
+        seqs.append([tid])
 
-    # Decode each token to find <think>
-    for pos in range(len(input_ids)):
-        token_text = tokenizer.decode([input_ids[pos]], skip_special_tokens=False)
-        for pattern in think_patterns:
-            if pattern in token_text:
-                return pos
-
-    # Fallback: search in decoded text and map back
-    full_text = tokenizer.decode(input_ids, skip_special_tokens=False)
-    if "<think>" in full_text:
-        # Find character position and estimate token position
-        char_pos = full_text.find("<think>")
-        # Rough estimate: decode up to that point
-        prefix = full_text[:char_pos + len("<think>")]
-        prefix_tokens = tokenizer.encode(prefix, add_special_tokens=False)
-        return len(prefix_tokens) - 1
-
-    return -1
+    last_pos = -1
+    for seq in seqs:
+        slen = len(seq)
+        for i in range(len(input_ids) - slen + 1):
+            if input_ids[i:i + slen] == seq:
+                last_pos = max(last_pos, i + slen - 1)
+    return last_pos
 
 
 def get_activations_at_position(model, tokenizer, text, layer, position="think"):
@@ -94,30 +97,11 @@ def get_activations_at_position(model, tokenizer, text, layer, position="think")
     else:
         target_pos = int(position)
 
-    # Storage for captured activation
-    activation = {}
-
-    def hook_fn(module, input, output):
-        # output is typically (hidden_states, ...) or just hidden_states
-        if isinstance(output, tuple):
-            hidden_states = output[0]
-        else:
-            hidden_states = output
-        # Capture activation at target position
-        activation["value"] = hidden_states[0, target_pos, :].detach().clone()
-
-    # Register hook on the target layer
-    # For Qwen2.5 / Llama-style models: model.model.layers[layer]
-    target_layer = model.model.layers[layer]
-    handle = target_layer.register_forward_hook(hook_fn)
-
-    try:
-        with torch.no_grad():
-            model(**inputs)
-    finally:
-        handle.remove()
-
-    return activation.get("value")
+    with torch.no_grad():
+        outputs = model(**inputs, output_hidden_states=True, use_cache=False)
+    # hidden_states[0] = embeddings, hidden_states[layer+1] = output of layer `layer`
+    hidden = outputs.hidden_states[layer + 1][0, target_pos, :].detach().clone()
+    return hidden
 
 
 def main():
@@ -125,13 +109,13 @@ def main():
     parser.add_argument(
         "--training_csv",
         type=str,
-        default="data/2026_01_29_new_full_training_set_with_CoTs_Sonnet_4_5.csv",
+        default="data/2026_01_29_lin_only_training_set_CoTs_500_Sonnet_4_5.csv",
         help="Path to training set with CoT columns"
     )
     parser.add_argument(
         "--base_model",
         type=str,
-        default="Qwen/Qwen2.5-7B-Instruct",
+        default="Qwen/Qwen3-8B",
         help="Base model to use for extracting activations"
     )
     parser.add_argument(
@@ -189,6 +173,39 @@ def main():
         help="Inject 'Be concise' into the user turn of each CoT text before extracting activations, "
              "so the derived vector captures 'Concise Risk-Aversion'."
     )
+    # --- ICV mode args ---
+    parser.add_argument(
+        "--icv_mode",
+        action="store_true",
+        help="Compute an In-Context Vector (ICV) instead of a contrastive CoT diff. "
+             "Measures the activation shift caused by prepending risk-averse demonstrations "
+             "to a situation prompt. The resulting vector is applied at inference the same way."
+    )
+    parser.add_argument(
+        "--icv_situations_csv",
+        type=str,
+        default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv",
+        help="CSV of situations to compute ICV over (uses first --num_pairs unique situation_ids). "
+             "Defaults to the validation set."
+    )
+    parser.add_argument(
+        "--num_icv_demos",
+        type=int,
+        default=5,
+        help="Number of risk-averse CoT demonstrations to prepend when computing the ICV (default: 5)"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for pair sampling (default: 42)"
+    )
+    parser.add_argument(
+        "--outlier_pct",
+        type=float,
+        default=5.0,
+        help="Percentage of highest-norm diffs to drop before averaging (default: 5.0)"
+    )
     args = parser.parse_args()
 
     # Check if training file exists
@@ -226,9 +243,9 @@ def main():
         print(f"Available values in '{args.filter_column}': {df[args.filter_column].unique().tolist()}")
         sys.exit(1)
 
-    # Limit to requested number of pairs
+    # Limit to requested number of pairs (random sample for unbiased selection)
     num_pairs = min(args.num_pairs, len(filtered_df))
-    filtered_df = filtered_df.head(num_pairs)
+    filtered_df = filtered_df.sample(n=num_pairs, random_state=args.seed)
 
     averse_cots = filtered_df[args.averse_column].tolist()
     neutral_cots = filtered_df[args.neutral_column].tolist()
@@ -256,6 +273,131 @@ def main():
         sys.exit(1)
 
     print(f"Model loaded. {num_layers} layers total, extracting from layer {args.layer}")
+
+    # -------------------------------------------------------------------------
+    # ICV MODE: measure activation shift from prepending risk-averse demos
+    # -------------------------------------------------------------------------
+    if args.icv_mode:
+        print(f"\n=== ICV MODE ===")
+        print(f"Using first {args.num_icv_demos} averse CoTs as demonstrations")
+        print(f"Computing shift over {num_pairs} situations from: {args.icv_situations_csv}")
+
+        # Build averse and neutral prefixes from first N CoTs in training set
+        averse_demos = averse_cots[:args.num_icv_demos]
+        neutral_demos = neutral_cots[:args.num_icv_demos]
+        averse_prefix = "\n\n".join(averse_demos)
+        neutral_prefix = "\n\n".join(neutral_demos)
+        print(f"Averse prefix: {len(tokenizer.encode(averse_prefix))} tokens")
+        print(f"Neutral prefix: {len(tokenizer.encode(neutral_prefix))} tokens")
+
+        # Load situation prompts from the ICV situations CSV
+        sit_df = pd.read_csv(args.icv_situations_csv)
+        # Get one prompt per unique situation_id
+        sit_prompts = []
+        for sit_id in sit_df["situation_id"].unique():
+            sit_rows = sit_df[sit_df["situation_id"] == sit_id]
+            raw_prompt = sit_rows["prompt_text"].iloc[0]
+            # Strip the "You can think before answering..." instruction suffix
+            clean = re.sub(
+                r"\s*You can think before answering,.*?would select\.",
+                "", raw_prompt, flags=re.IGNORECASE | re.DOTALL
+            ).strip()
+            sit_prompts.append(clean)
+            if len(sit_prompts) >= num_pairs:
+                break
+
+        print(f"Loaded {len(sit_prompts)} situation prompts")
+
+        vector_diffs = []
+        skipped = 0
+
+        for i, prompt in enumerate(tqdm(sit_prompts, desc="Computing ICV")):
+            # Format the test situation as a chat prompt (up to <think>)
+            messages = [{"role": "user", "content": prompt}]
+            base_text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            # The Qwen3 generation prompt already ends with <think>; if not, append it
+            if not base_text.rstrip().endswith("<think>"):
+                base_text = base_text.rstrip() + "<think>"
+
+            pos_text = averse_prefix + "\n\n" + base_text
+            neg_text = neutral_prefix + "\n\n" + base_text
+
+            # Activation at <think> position with averse vs neutral prefix
+            h_averse = get_activations_at_position(
+                model, tokenizer, pos_text, args.layer, "think"
+            )
+            h_neutral = get_activations_at_position(
+                model, tokenizer, neg_text, args.layer, "think"
+            )
+
+            if h_averse is None or h_neutral is None:
+                skipped += 1
+                if skipped <= 3:
+                    print(f"\n  Warning: Could not find <think> position in situation {i+1}")
+                continue
+
+            # ICV contribution: averse vs neutral demo context at <think> token
+            vector_diffs.append(h_averse - h_neutral)
+
+        if len(vector_diffs) == 0:
+            print("\nERROR: Could not compute any valid ICV differences")
+            sys.exit(1)
+
+        print(f"\nComputed {len(vector_diffs)} valid ICV differences (skipped {skipped})")
+
+        if args.outlier_pct > 0 and len(vector_diffs) > 10:
+            norms = torch.tensor([d.norm().item() for d in vector_diffs])
+            threshold = torch.quantile(norms, 1.0 - args.outlier_pct / 100.0)
+            kept = [d for d, n in zip(vector_diffs, norms.tolist()) if n <= threshold.item()]
+            print(f"Outlier filter: kept {len(kept)}/{len(vector_diffs)} diffs (threshold norm={threshold:.2f})")
+            vector_diffs = kept
+
+        steering_vector = torch.stack(vector_diffs).mean(dim=0)
+        raw_norm = steering_vector.norm().item()
+        steering_vector = steering_vector / steering_vector.norm()
+
+        save_data = {
+            "vector": steering_vector,
+            "layer": args.layer,
+            "position": "think",
+            "num_pairs": len(vector_diffs),
+            "base_model": args.base_model,
+            "icv_mode": True,
+            "num_icv_demos": args.num_icv_demos,
+            "icv_situations_csv": args.icv_situations_csv,
+            "filter_column": args.filter_column,
+            "filter_value": args.filter_value,
+            "hidden_size": steering_vector.shape[0],
+            "raw_norm": raw_norm,
+        }
+        torch.save(save_data, args.output)
+
+        print(f"\n{'='*50}")
+        print("IN-CONTEXT VECTOR GENERATED")
+        print("="*50)
+        print(f"Output: {args.output}")
+        print(f"Shape: {steering_vector.shape}")
+        print(f"Layer: {args.layer}")
+        print(f"Demos used: {args.num_icv_demos}")
+        print(f"Situations averaged: {len(vector_diffs)}")
+        print(f"Vector norm: {steering_vector.norm().item():.4f} (normalised; raw was {raw_norm:.4f})")
+        print(f"Vector mean: {steering_vector.mean().item():.6f}")
+        print(f"Vector std: {steering_vector.std().item():.4f}")
+        print(f"Polarity: averse vs neutral demos")
+        print("="*50)
+        print(f"\nTo use this ICV with evaluate.py, run:")
+        print(f"  python evaluate.py --steering_path {args.output} --alpha 1.0")
+
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
+        return
+
+    # -------------------------------------------------------------------------
+    # DEFAULT MODE: contrastive CoT activation diff at <think> position
+    # -------------------------------------------------------------------------
 
     # Compute activation differences
     vector_diffs = []
@@ -303,8 +445,17 @@ def main():
 
     print(f"\nComputed {len(vector_diffs)} valid differences (skipped {skipped})")
 
-    # Average to get final steering vector
+    if args.outlier_pct > 0 and len(vector_diffs) > 10:
+        norms = torch.tensor([d.norm().item() for d in vector_diffs])
+        threshold = torch.quantile(norms, 1.0 - args.outlier_pct / 100.0)
+        kept = [d for d, n in zip(vector_diffs, norms.tolist()) if n <= threshold.item()]
+        print(f"Outlier filter: kept {len(kept)}/{len(vector_diffs)} diffs (threshold norm={threshold:.2f})")
+        vector_diffs = kept
+
+    # Average to get final steering vector, then normalise to unit length
     steering_vector = torch.stack(vector_diffs).mean(dim=0)
+    raw_norm = steering_vector.norm().item()
+    steering_vector = steering_vector / steering_vector.norm()
 
     # Save with metadata
     save_data = {
@@ -319,6 +470,7 @@ def main():
         "neutral_column": args.neutral_column,
         "hidden_size": steering_vector.shape[0],
         "concise_prompt": args.concise_prompt,
+        "raw_norm": raw_norm,
     }
 
     torch.save(save_data, args.output)
@@ -331,7 +483,7 @@ def main():
     print(f"Layer: {args.layer}")
     print(f"Position: {args.position}")
     print(f"Pairs used: {len(vector_diffs)}")
-    print(f"Vector norm: {steering_vector.norm().item():.4f}")
+    print(f"Vector norm: {steering_vector.norm().item():.4f} (normalised; raw was {raw_norm:.4f})")
     print(f"Vector mean: {steering_vector.mean().item():.6f}")
     print(f"Vector std: {steering_vector.std().item():.4f}")
     print("="*50)
