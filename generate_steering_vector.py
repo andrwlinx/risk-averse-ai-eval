@@ -3,14 +3,23 @@
 Generate steering vectors or in-context vectors (ICVs) for activation engineering.
 
 Two modes:
-  Default (contrastive CoT): Contrasts risk-averse vs risk-neutral chain-of-thought
-  activations at the token following <think>, using only lin_only situations.
 
-  ICV mode (--icv_mode): Measures the activation shift caused by prepending
-  risk-averse demonstrations to a situation prompt, capturing "what the model's
-  state looks like when primed with risk-averse examples."
+  Default (contrastive CoT):
+    For each same-row pair in the training set (filtered to lin_only situations),
+    extracts hidden-state activations at the <think> token for both the risk-averse
+    CoT (chosen_full) and the risk-neutral CoT (rejected_full), computes the
+    difference (averse - neutral), and averages across pairs to produce a steering
+    vector. The resulting vector points in the direction of risk-averse reasoning.
 
-Uses transformers library for compatibility with evaluate.py.
+  ICV mode (--icv_mode):
+    Builds two few-shot prefixes from lin_only training CoTs — one averse, one
+    neutral — then for each target situation computes the activation difference at
+    the <think> token between (averse_prefix + situation) and
+    (neutral_prefix + situation). Averaging these differences yields an in-context
+    vector that captures the effect of risk-averse demonstrations on model state.
+
+Both modes produce a normalised steering vector saved as a .pt file compatible
+with evaluate.py and sweep_steering.py.
 """
 
 import argparse
@@ -26,11 +35,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def inject_concise_instruction(text, instruction):
-    """Inject a concise instruction into the user turn of a formatted chat text.
+    """Inject an instruction string at the start of the user turn in a chat-formatted text.
 
-    Looks for the Qwen-style '<|im_start|>user\\n' marker and inserts the
-    instruction at the start of the user content. Falls back to prepending
-    to the full text if the marker is not found.
+    Looks for the Qwen chat marker '<|im_start|>user\\n' and inserts the instruction
+    immediately after it. Falls back to prepending to the full text if the marker is
+    not found.
     """
     marker = "<|im_start|>user\n"
     if marker in text:
@@ -41,10 +50,12 @@ def inject_concise_instruction(text, instruction):
 
 
 def find_think_token_position(tokenizer, input_ids):
-    """Find the position of the last <think> token sequence in input_ids.
+    """Return the token index of the last <think> token sequence in input_ids.
 
-    Returns the index of the final token of the last match, or -1 if not found.
-    Caller should use last_pos + 1 as the activation position.
+    Checks multiple surface forms ("<think>", "<|think|>", " <think>") and the
+    single special-token representation. Returns the index of the final token of
+    the last match, or -1 if not found. Callers should use last_pos + 1 as the
+    activation extraction position (i.e. the first token inside the thinking block).
     """
     think_patterns = ["<think>", "<|think|>", " <think>"]
     seqs = []
@@ -67,18 +78,20 @@ def find_think_token_position(tokenizer, input_ids):
 
 
 def get_activations_at_position(model, tokenizer, text, layer, position="think"):
-    """Get activations at a specific position in the text.
+    """Extract the hidden state at a specific token position from the given layer.
 
     Args:
-        model: The transformer model
-        tokenizer: The tokenizer
-        text: Input text (should include <think> tag)
-        layer: Which layer to extract from (0-indexed)
-        position: "think" to get position after <think>, "last" for last token,
-                  or an int for specific position
+        model: The loaded transformer model (eval mode, bfloat16).
+        tokenizer: The corresponding tokenizer.
+        text: Full input text to tokenize and run through the model.
+        layer: Layer index to extract from (0-indexed; layer 0 = first transformer block).
+        position: Where to extract:
+            "think" — token immediately after the last <think> tag (returns None if absent);
+            "last"  — final token in the sequence;
+            int     — explicit token index.
 
     Returns:
-        Tensor of shape (hidden_size,) or None if position not found
+        Tensor of shape (hidden_size,), or None if the requested position cannot be found.
     """
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
     input_ids = inputs["input_ids"][0].tolist()
