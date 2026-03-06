@@ -116,14 +116,14 @@ def main():
                         help="Path to steering vector .pt file")
     parser.add_argument("--model_path", type=str, default=None,
                         help="Path to fine-tuned LoRA adapter (omit for base model)")
-    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct",
+    parser.add_argument("--base_model", type=str, default="Qwen/Qwen3-8B",
                         help="Base model ID")
     parser.add_argument("--val_csv", type=str,
                         default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv")
     parser.add_argument("--num_situations", type=int, default=20,
                         help="Situations per combo (default 20 for speed)")
     parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--max_new_tokens", type=int, default=4096)
+    parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument("--disable_thinking", action="store_true")
     parser.add_argument("--enable_thinking", action="store_true",
                         help="Force thinking mode ON, overriding the auto-disable for base models")

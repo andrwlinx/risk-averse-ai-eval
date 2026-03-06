@@ -656,9 +656,9 @@ def main():
                         help="Output JSON file path (auto-generated if omitted)")
     parser.add_argument("--no_save_responses", action="store_true",
                         help="Do NOT save full responses (by default, all CoT responses are saved)")
-    parser.add_argument("--max_new_tokens", type=int, default=4096,
-                        help="Max tokens to generate (default 4096)")
-    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct",
+    parser.add_argument("--max_new_tokens", type=int, default=1024,
+                        help="Max tokens to generate (default 1024)")
+    parser.add_argument("--base_model", type=str, default="Qwen/Qwen3-8B",
                         help="Base model ID (e.g., Qwen/Qwen3-8B)")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Sampling temperature (0 = deterministic)")
