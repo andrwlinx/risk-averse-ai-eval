@@ -222,7 +222,8 @@ def extract_choice_permissive(response, num_options):
     - Both letter options (a,b,c) and numeric options (1,2,3)
     """
     response_lower = response.lower()
-    response_lower = response_lower.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
+    response_lower = response_lower.replace("\\n", "\n").replace("\\r", "\r")
+    # Note: do NOT replace \\t→tab — it corrupts LaTeX like \text{} and \boxed{\text{}}
     response_lower = re.sub(r"[*_`]+", "", response_lower)
     response_lower = response_lower.rstrip()
     tail_text = response_lower[-2500:] if len(response_lower) > 2500 else response_lower
@@ -247,8 +248,8 @@ def extract_choice_permissive(response, num_options):
     if json_choice:
         return json_choice
 
-    # 2. LaTeX boxed: \boxed{a}
-    boxed_choice = _last_match(r'\\boxed\s*\{\s*([a-z0-9]+)\s*\}', response_lower)
+    # 2. LaTeX boxed: \boxed{a} or \boxed{\text{Option 2}}
+    boxed_choice = _last_match(r'\\boxed\s*\{\s*(?:\\text\s*\{\s*(?:option\s*)?)?([a-z0-9]+)\s*\}?', response_lower)
     if boxed_choice:
         return boxed_choice
 
@@ -293,6 +294,49 @@ def extract_choice_permissive(response, num_options):
     compact = re.sub(r'\s+', '', response_lower)
     if compact in valid_options:
         return compact
+
+    # 8. Conclusion phrases — always scan (covers both full and truncated responses).
+    conclusion = _last_match(
+        r"(?:so|therefore|thus|hence|i(?:'d)?\s+(?:would\s+)?(?:choose|select|pick|go\s+with|prefer)|"
+        r"(?:best|optimal|most\s+attractive)\s+(?:option|choice)\s+(?:is|would\s+be)|"
+        r"(?:choose|select|pick|go\s+with)\s+option)\s*[:\-]?\s*(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?"
+    )
+    if conclusion:
+        return conclusion
+
+    # 9. EV analysis style: "Option X has the highest expected value/EV/utility"
+    #    Also catches truncated tail: "option X has the" (cut off before "highest")
+    ev_winner = _last_match(
+        r"option\s*[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\s+(?:has|gives|yields|is)\s+(?:the\s+)?"
+        r"(?:highest|greatest|largest|best|maximum|most\s+attractive|higher|greater|larger)"
+    )
+    if ev_winner:
+        return ev_winner
+
+    # 9b. Truncated tail: response ends with "option X has the" (conclusion cut off)
+    tail_50 = response_lower[-150:].rstrip()
+    truncated = re.search(
+        r"option\s*[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\s+(?:has|gives|yields|is)\s+the\s*$",
+        tail_50
+    )
+    if truncated and truncated.group(1) in valid_options:
+        return truncated.group(1)
+
+    # 10. Highest EV/utility mentioned before option label: "highest ... is option X"
+    ev_winner2 = _last_match(
+        r"(?:highest|greatest|largest|best|maximum|most\s+attractive)"
+        r"[^a-z0-9\n]{0,40}(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?"
+    )
+    if ev_winner2:
+        return ev_winner2
+
+    # 11. "The answer/best choice is option X" or "I will go with X"
+    final_stmt = _last_match(
+        r"(?:the\s+)?(?:best|optimal|correct|right)\s+(?:option|choice|answer)\s+(?:is|would\s+be)\s*"
+        r"(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?"
+    )
+    if final_stmt:
+        return final_stmt
 
     return None
 
@@ -474,7 +518,7 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
                    max_time_per_generation=120,
                    disable_thinking=False, no_save_responses=True,
                    verbose=True, incremental_save_path=None, incremental_save_args=None,
-                   extra_instructions=""):
+                   extra_instructions="", thinking_prefix=None):
     """Run evaluation loop over situations with given steering params.
 
     Args:
@@ -493,6 +537,9 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         incremental_save_path: If set, save results after each situation
         incremental_save_args: args object needed by save_incremental
         extra_instructions: If set, injected as a system message before the user prompt
+        thinking_prefix: If set and thinking is enabled, pre-fills the <think> block with
+            this text then closes it with </think>, forcing the model to skip extended
+            reasoning and generate only the answer. Dramatically reduces generation time.
 
     Returns:
         dict with keys: cooperate_rate, rebel_rate, steal_rate, cara_rate,
@@ -515,6 +562,12 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         if disable_thinking:
             template_kwargs["enable_thinking"] = False
         text = tokenizer.apply_chat_template(messages, **template_kwargs)
+
+        # Pre-fill thinking block to force model straight to the answer.
+        # The template already ends with <think>\n; we append a brief trigger
+        # then </think> so the model only generates the answer portion.
+        if thinking_prefix is not None and not disable_thinking:
+            text += thinking_prefix + "\n</think>\n"
 
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
