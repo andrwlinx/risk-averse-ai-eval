@@ -1,0 +1,851 @@
+{
+  "sweep_config": {
+    "base_model": "Qwen/Qwen3-14B",
+    "model_path": null,
+    "steering_path": "qwen3_14b_steering_layer20.pt",
+    "val_csv": "data/in_distribution_val_set.csv",
+    "num_situations": 50,
+    "filter_bucket_label": "lin_only",
+    "temperature": 0.0,
+    "layer_candidates": [
+      12,
+      16,
+      20,
+      24,
+      28,
+      [
+        12,
+        20
+      ],
+      [
+        16,
+        20,
+        24
+      ],
+      [
+        12,
+        20,
+        28
+      ]
+    ],
+    "alphas": [
+      -5.0,
+      -3.0,
+      -1.0,
+      0.0,
+      1.0,
+      3.0,
+      5.0
+    ],
+    "timestamp": "2026-03-12T15:17:05.048135",
+    "total_sweep_time_seconds": 19298.6
+  },
+  "baseline_cooperate_rate": 0.0,
+  "results": [
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.5555555555555556,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.4444444444444444,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.75,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.25,
+      "parse_rate": 0.8888888888888888
+    },
+    {
+      "layer_label": "12",
+      "layer": 12,
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.875,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.125,
+      "parse_rate": 0.8888888888888888
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16",
+      "layer": 16,
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.6666666666666666,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.3333333333333333,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.75,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.25,
+      "parse_rate": 0.8888888888888888
+    },
+    {
+      "layer_label": "20",
+      "layer": 20,
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.6666666666666666,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.3333333333333333,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.6666666666666666,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.5555555555555556,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.4444444444444444,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "24",
+      "layer": 24,
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.5555555555555556,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.4444444444444444,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "28",
+      "layer": 28,
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.5555555555555556,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.3333333333333333,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 0.7777777777777778
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.875,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.125,
+      "parse_rate": 0.8888888888888888
+    },
+    {
+      "layer_label": "12+20",
+      "layer": [
+        12,
+        20
+      ],
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "16+20+24",
+      "layer": [
+        16,
+        20,
+        24
+      ],
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": -5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.7777777777777778,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.2222222222222222,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": -3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.6666666666666666,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.3333333333333333,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": -1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.6666666666666666,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.3333333333333333,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": 0.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 1.0,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.0,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": 1.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.8888888888888888,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.1111111111111111,
+      "parse_rate": 1.0
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": 3.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.875,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.125,
+      "parse_rate": 0.8888888888888888
+    },
+    {
+      "layer_label": "12+20+28",
+      "layer": [
+        12,
+        20,
+        28
+      ],
+      "alpha": 5.0,
+      "safe_acc": 0.0,
+      "risky_acc": 0.0,
+      "linear_rate": 0.875,
+      "cooperate_rate": 0.0,
+      "rebel_rate": 0.0,
+      "steal_rate": 0.0,
+      "cara_rate": 0.125,
+      "parse_rate": 0.8888888888888888
+    }
+  ]
+}

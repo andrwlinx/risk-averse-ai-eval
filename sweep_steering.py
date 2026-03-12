@@ -77,6 +77,9 @@ def plot_sweep(results, base_ra, layer_candidates, output_path):
                 marker="o", label="Safe Acc", color="green")
         ax.plot(layer_data["alpha"], layer_data["risky_acc"],
                 marker="x", label="Risky Acc", color="red")
+        if "linear_rate" in layer_data.columns and layer_data["linear_rate"].sum() > 0:
+            ax.plot(layer_data["alpha"], layer_data["linear_rate"],
+                    marker="s", label="Linear Rate", color="blue")
         ax.axhline(y=base_ra, color="gray", linestyle="--", alpha=0.5,
                    label=f"Base Safe ({base_ra:.0%})")
         title = f"Layers {lbl}" if "+" in lbl else f"Layer {lbl}"
@@ -227,11 +230,15 @@ def main():
         temperature=args.temperature, max_new_tokens=args.max_new_tokens,
         max_time_per_generation=args.max_time_per_generation,
         disable_thinking=args.disable_thinking,
-        no_save_responses=True, verbose=False,
+        no_save_responses=False, verbose=False,
     )
     base_ra = baseline["cooperate_rate"]
+    base_linear = baseline["linear_rate"]
+    base_cara = baseline["cara_rate"]
     print(f"Baseline cooperate rate: {base_ra:.1%}")
-    print(f"Baseline parse rate: {baseline['parse_rate']:.1%}")
+    print(f"Baseline linear rate:    {base_linear:.1%}")
+    print(f"Baseline cara rate:      {base_cara:.1%}")
+    print(f"Baseline parse rate:     {baseline['parse_rate']:.1%}")
 
     # --- Sweep ---
     total_combos = len(LAYER_CANDIDATES) * len(ALPHAS)
@@ -254,19 +261,21 @@ def main():
             temperature=args.temperature, max_new_tokens=args.max_new_tokens,
             max_time_per_generation=args.max_time_per_generation,
             disable_thinking=args.disable_thinking,
-            no_save_responses=True, verbose=False,
+            no_save_responses=False, verbose=False,
         )
 
         safe_acc = eval_result["cooperate_rate"]
         risky_acc = eval_result["rebel_rate"] + eval_result["steal_rate"]
         combo_elapsed = time.time() - combo_start
 
+        linear_rate = eval_result["linear_rate"]
         sweep_results.append({
             "layer_label": lbl,
             "layer": L if isinstance(L, int) else list(L),
             "alpha": alpha,
             "safe_acc": safe_acc,
             "risky_acc": risky_acc,
+            "linear_rate": linear_rate,
             "cooperate_rate": eval_result["cooperate_rate"],
             "rebel_rate": eval_result["rebel_rate"],
             "steal_rate": eval_result["steal_rate"],
@@ -274,8 +283,9 @@ def main():
             "parse_rate": eval_result["parse_rate"],
         })
 
+        cara_rate = eval_result["cara_rate"]
         remaining = combo_elapsed * (total_combos - combo_idx - 1)
-        print(f"safe={safe_acc:.0%} risky={risky_acc:.0%} "
+        print(f"safe={safe_acc:.0%} risky={risky_acc:.0%} lin={linear_rate:.0%} cara={cara_rate:.0%} "
               f"({combo_elapsed:.0f}s, ETA: {remaining / 60:.0f}min)")
 
     total_sweep_time = time.time() - sweep_start
