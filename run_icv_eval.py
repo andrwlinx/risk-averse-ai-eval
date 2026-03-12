@@ -11,7 +11,7 @@ Usage:
         --base_model Qwen/Qwen3-8B \
         --steering_path qwen3_8b_icv_layer18.pt \
         --results_dir results/my_run \
-        --val_csv data/in_distribution_val_set.csv \
+        --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
         --filter_bucket_label lin_only
 """
 
@@ -98,7 +98,7 @@ def main():
     parser.add_argument("--steering_path", type=str, required=True)
     parser.add_argument("--results_dir", type=str, required=True)
     parser.add_argument("--val_csv", type=str,
-                        default="data/in_distribution_val_set.csv")
+                        default="data/2026_01_29_new_val_set_probabilities_add_to_100.csv")
     parser.add_argument("--filter_bucket_label", type=str, default="lin_only")
     parser.add_argument("--num_situations", type=int, default=50)
     parser.add_argument("--alphas", type=float, nargs="+", default=DEFAULT_ALPHAS)
@@ -156,6 +156,7 @@ def main():
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
+        attn_implementation="flash_attention_2",
     )
     model.eval()
 

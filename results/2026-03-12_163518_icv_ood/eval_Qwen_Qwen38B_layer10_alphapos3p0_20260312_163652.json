@@ -1,0 +1,29 @@
+{
+  "evaluation_config": {
+    "base_model": "Qwen/Qwen3-8B",
+    "model_path": null,
+    "steering_path": "qwen3_8b_icv_sliding_layer18.pt",
+    "steering_alpha": 3.0,
+    "steering_layer": 10,
+    "steering_layers": null,
+    "layer_label": "10",
+    "val_csv": "data/2026_01_29_new_val_set_probabilities_add_to_100.csv",
+    "filter_bucket_label": "lin_only",
+    "max_new_tokens": 3000,
+    "temperature": 0.0,
+    "enable_thinking": false,
+    "num_situations": 0,
+    "timestamp": "2026-03-12T16:37:06.405323"
+  },
+  "metrics": {
+    "parse_rate": 0,
+    "cooperate_rate": 0,
+    "rebel_rate": 0,
+    "steal_rate": 0,
+    "best_cara_rate": 0,
+    "best_linear_rate": 0
+  },
+  "num_valid": 0,
+  "num_total": 0,
+  "results": []
+}

@@ -330,140 +330,99 @@ def main():
     # ICV MODE: measure activation shift from prepending risk-averse demos
     # -------------------------------------------------------------------------
     if args.icv_mode:
-        num_sit = args.num_icv_situations if args.num_icv_situations is not None else num_pairs
+        num_windows = len(filtered_df) - args.num_icv_demos
+        if num_windows <= 0:
+            print(f"ERROR: Need at least {args.num_icv_demos+1} rows; only {len(filtered_df)} available.")
+            sys.exit(1)
+        num_sit = min(args.num_icv_situations, num_windows) if args.num_icv_situations else num_windows
 
-        print(f"\n=== ICV MODE ===")
-        print(f"Using {args.num_icv_demos} demos per batch, {args.num_demo_batches} batch(es)")
+        print(f"\n=== ICV MODE (sliding window) ===")
+        print(f"Window size (demos): {args.num_icv_demos}")
+        print(f"Total windows available: {num_windows}  →  using: {num_sit}")
         print(f"ICV position: {args.icv_position}")
-        print(f"Computing shift over {num_sit} situations from: {args.icv_situations_csv}")
 
-        # Load and validate situation prompts
-        sit_df = pd.read_csv(args.icv_situations_csv)
-        required_sit_cols = ["situation_id", "prompt_text"]
-        missing_sit = [c for c in required_sit_cols if c not in sit_df.columns]
-        if missing_sit:
-            print(f"ERROR: ICV situations CSV missing columns: {missing_sit}")
-            sys.exit(1)
-
-        # Get one prompt per unique situation_id, up to num_sit
-        sit_prompts = []
-        for sit_id in sit_df["situation_id"].unique():
-            sit_rows = sit_df[sit_df["situation_id"] == sit_id]
-            raw_prompt = sit_rows["prompt_text"].iloc[0]
-            clean = re.sub(
-                r"\s*You can think before answering,.*?would select\.",
-                "", raw_prompt, flags=re.IGNORECASE | re.DOTALL
-            ).strip()
-            sit_prompts.append(clean)
-            if len(sit_prompts) >= num_sit:
-                break
-
-        if len(sit_prompts) == 0:
-            print("ERROR: No situation prompts loaded.")
-            sys.exit(1)
-        print(f"Loaded {len(sit_prompts)} situation prompts")
-
-        # Pre-clean demo prompts from filtered_df (same rows as averse/neutral CoTs)
-        demo_prompts_clean = [
-            re.sub(
-                r"\s*You can think before answering,.*?would select\.",
-                "", p, flags=re.IGNORECASE | re.DOTALL
-            ).strip()
+        # Pre-clean all prompt_text rows in filtered_df
+        all_prompts_clean = [
+            re.sub(r"\s*You can think before answering,.*?would select\.",
+                   "", p, flags=re.IGNORECASE|re.DOTALL).strip()
             for p in filtered_df["prompt_text"].tolist()
         ]
+        all_averse_cots  = filtered_df[args.averse_column].tolist()
+        all_neutral_cots = filtered_df[args.neutral_column].tolist()
 
-        all_batch_diffs = []
-        for batch_idx in range(args.num_demo_batches):
-            rng = random.Random(args.seed + batch_idx)
-            demo_indices = rng.sample(range(len(averse_cots)), min(args.num_icv_demos, len(averse_cots)))
-            sel_averse_prompts  = [demo_prompts_clean[i] for i in demo_indices]
-            sel_neutral_prompts = [demo_prompts_clean[i] for i in demo_indices]
-            sel_averse_cots     = [averse_cots[i] for i in demo_indices]
-            sel_neutral_cots    = [neutral_cots[i] for i in demo_indices]
+        vector_diffs = []
+        skipped = 0
 
-            print(f"\nBatch {batch_idx+1}/{args.num_demo_batches}: demo indices {demo_indices}")
+        for k in tqdm(range(num_sit), desc="ICV sliding window"):
+            demo_prompts      = all_prompts_clean[k : k + args.num_icv_demos]
+            demo_averse_cots  = all_averse_cots[k  : k + args.num_icv_demos]
+            demo_neutral_cots = all_neutral_cots[k : k + args.num_icv_demos]
+            query_prompt      = all_prompts_clean[k + args.num_icv_demos]
 
-            vector_diffs = []
-            skipped = 0
+            pos_text = build_icv_text(tokenizer, demo_prompts, demo_averse_cots,  query_prompt)
+            neg_text = build_icv_text(tokenizer, demo_prompts, demo_neutral_cots, query_prompt)
 
-            for i, prompt in enumerate(tqdm(sit_prompts, desc=f"ICV batch {batch_idx+1}")):
-                pos_text = build_icv_text(tokenizer, sel_averse_prompts,  sel_averse_cots,  prompt)
-                neg_text = build_icv_text(tokenizer, sel_neutral_prompts, sel_neutral_cots, prompt)
+            h_averse  = get_activations_at_position(model, tokenizer, pos_text, args.layer, args.icv_position)
+            h_neutral = get_activations_at_position(model, tokenizer, neg_text, args.layer, args.icv_position)
 
-                h_averse  = get_activations_at_position(model, tokenizer, pos_text, args.layer, args.icv_position)
-                h_neutral = get_activations_at_position(model, tokenizer, neg_text, args.layer, args.icv_position)
+            if h_averse is None or h_neutral is None:
+                skipped += 1
+                if skipped <= 3:
+                    print(f"\n  Warning: Could not find position '{args.icv_position}' at window {k}")
+                continue
+            vector_diffs.append(h_averse - h_neutral)
 
-                if h_averse is None or h_neutral is None:
-                    skipped += 1
-                    if skipped <= 3:
-                        print(f"\n  Warning: Could not find position '{args.icv_position}' in situation {i+1}")
-                    continue
+        if len(vector_diffs) == 0:
+            print("\nERROR: No valid diffs computed.")
+            sys.exit(1)
 
-                vector_diffs.append(h_averse - h_neutral)
+        print(f"\nComputed {len(vector_diffs)} valid diffs (skipped {skipped})")
 
-            if len(vector_diffs) == 0:
-                print(f"\nERROR: No valid diffs in batch {batch_idx+1}")
-                sys.exit(1)
+        if args.outlier_pct > 0 and len(vector_diffs) > 10:
+            norms = torch.tensor([d.norm().item() for d in vector_diffs])
+            threshold = torch.quantile(norms, 1.0 - args.outlier_pct / 100.0)
+            kept = [d for d, n in zip(vector_diffs, norms.tolist()) if n <= threshold.item()]
+            print(f"Outlier filter: kept {len(kept)}/{len(vector_diffs)} (threshold={threshold:.2f})")
+            vector_diffs = kept
 
-            print(f"Batch {batch_idx+1}: {len(vector_diffs)} valid diffs (skipped {skipped})")
+        if len(vector_diffs) == 0:
+            print("\nERROR: No diffs remain after outlier filtering.")
+            sys.exit(1)
 
-            if args.outlier_pct > 0 and len(vector_diffs) > 10:
-                norms = torch.tensor([d.norm().item() for d in vector_diffs])
-                threshold = torch.quantile(norms, 1.0 - args.outlier_pct / 100.0)
-                kept = [d for d, n in zip(vector_diffs, norms.tolist()) if n <= threshold.item()]
-                print(f"Outlier filter: kept {len(kept)}/{len(vector_diffs)} diffs (threshold norm={threshold:.2f})")
-                vector_diffs = kept
-
-            if len(vector_diffs) == 0:
-                print(f"\nERROR: No diffs remain after outlier filtering in batch {batch_idx+1}")
-                sys.exit(1)
-
-            all_batch_diffs.append(torch.stack(vector_diffs).mean(dim=0))
-
-        # Average across batches, then normalise
-        steering_vector = torch.stack(all_batch_diffs).mean(dim=0)
+        steering_vector = torch.stack(vector_diffs).mean(dim=0)
         raw_norm = steering_vector.norm().item()
         steering_vector = steering_vector / steering_vector.norm()
 
         save_data = {
-            "vector": steering_vector,
-            "layer": args.layer,
-            "position": args.icv_position,
-            "num_pairs": num_sit,
-            "base_model": args.base_model,
-            "icv_mode": True,
-            "num_icv_demos": args.num_icv_demos,
-            "num_demo_batches": args.num_demo_batches,
-            "num_icv_situations": num_sit,
-            "icv_situations_csv": args.icv_situations_csv,
-            "filter_column": args.filter_column,
-            "filter_value": args.filter_value,
-            "hidden_size": steering_vector.shape[0],
-            "raw_norm": raw_norm,
+            "vector":           steering_vector,
+            "layer":            args.layer,
+            "position":         args.icv_position,
+            "num_pairs":        len(vector_diffs),
+            "base_model":       args.base_model,
+            "icv_mode":         "sliding_window",
+            "num_icv_demos":    args.num_icv_demos,
+            "num_icv_windows":  num_sit,
+            "filter_column":    args.filter_column,
+            "filter_value":     args.filter_value,
+            "hidden_size":      steering_vector.shape[0],
+            "raw_norm":         raw_norm,
         }
         torch.save(save_data, args.output)
 
         print(f"\n{'='*50}")
-        print("IN-CONTEXT VECTOR GENERATED")
+        print("IN-CONTEXT VECTOR GENERATED (sliding window)")
         print("="*50)
         print(f"Output: {args.output}")
         print(f"Shape: {steering_vector.shape}")
-        print(f"Layer: {args.layer}")
-        print(f"Position: {args.icv_position}")
-        print(f"Demos per batch: {args.num_icv_demos}")
-        print(f"Demo batches: {args.num_demo_batches}")
-        print(f"Situations averaged: {num_sit}")
-        print(f"Vector norm: {steering_vector.norm().item():.4f} (normalised; raw was {raw_norm:.4f})")
-        print(f"Vector mean: {steering_vector.mean().item():.6f}")
-        print(f"Vector std: {steering_vector.std().item():.4f}")
-        print(f"Polarity: averse vs neutral demos")
+        print(f"Layer: {args.layer}  |  Position: {args.icv_position}")
+        print(f"Window size: {args.num_icv_demos}  |  Windows used: {len(vector_diffs)}")
+        print(f"Vector norm: {steering_vector.norm().item():.4f} (raw: {raw_norm:.4f})")
+        print(f"Vector mean: {steering_vector.mean().item():.6f}  |  std: {steering_vector.std().item():.4f}")
         print("="*50)
         print(f"\nTo use this ICV with evaluate.py, run:")
         print(f"  python evaluate.py --steering_path {args.output} --alpha 1.0")
 
-        del model
-        gc.collect()
-        torch.cuda.empty_cache()
+        del model; gc.collect(); torch.cuda.empty_cache()
         return
 
     # -------------------------------------------------------------------------

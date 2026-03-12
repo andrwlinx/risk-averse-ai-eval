@@ -474,7 +474,7 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
                    max_time_per_generation=120,
                    disable_thinking=False, no_save_responses=True,
                    verbose=True, incremental_save_path=None, incremental_save_args=None,
-                   extra_instructions=""):
+                   extra_instructions="", thinking_prefix=None):
     """Run evaluation loop over situations with given steering params.
 
     Args:
@@ -493,6 +493,8 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         incremental_save_path: If set, save results after each situation
         incremental_save_args: args object needed by save_incremental
         extra_instructions: If set, injected as a system message before the user prompt
+        thinking_prefix: If set, appended after <think> token and then </think> is
+            injected to skip extended reasoning (pre-fills the thinking block)
 
     Returns:
         dict with keys: cooperate_rate, rebel_rate, steal_rate, cara_rate,
@@ -515,6 +517,9 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         if disable_thinking:
             template_kwargs["enable_thinking"] = False
         text = tokenizer.apply_chat_template(messages, **template_kwargs)
+        if thinking_prefix is not None:
+            # text ends with <think>; append prefix then close the thinking block
+            text = text.rstrip() + thinking_prefix + "</think>\n\n"
 
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
