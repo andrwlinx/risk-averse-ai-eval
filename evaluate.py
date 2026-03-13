@@ -224,6 +224,8 @@ def extract_choice_permissive(response, num_options):
     response_lower = response.lower()
     response_lower = response_lower.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
     response_lower = re.sub(r"[*_`]+", "", response_lower)
+    # Strip markdown block prefixes (headings, blockquotes, checkmark emoji) per line
+    response_lower = re.sub(r"^[\s#>✅☑️✔️]+", "", response_lower, flags=re.MULTILINE)
     response_lower = response_lower.rstrip()
     tail_text = response_lower[-2500:] if len(response_lower) > 2500 else response_lower
 
@@ -255,7 +257,7 @@ def extract_choice_permissive(response, num_options):
     # 3. Explicit answer markers near the end
     answer_choice = _last_match(
         r'(?:final\s+answer|final|answer|my\s+answer|choice)\s*[:\-]?\s*(?:is\s+)?(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?'
-        r'(?=\s*(?:$|[\n\r\.\,\;\:\!\)]|\b(?:because|as|since|for)\b))'
+        r'(?=\s*(?:$|[\n\r\.\,\;\:\!\)\-—\(]|\b(?:because|as|since|for)\b))'
     )
     if answer_choice:
         return answer_choice
@@ -264,15 +266,22 @@ def extract_choice_permissive(response, num_options):
     choice_choice = _last_match(
         r"(?:i(?:'d)?\s+)?(?:would\s+)?(?:choose|select|pick|chose|selected|picking|opt\s+for|go\s+with|prefer|recommend|suggest)"
         r"\s+(?:option\s*)?[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?"
-        r"(?=\s*(?:$|[\n\r\.\,\;\:\!\)]|\b(?:because|as|since|for)\b))"
+        r"(?=\s*(?:$|[\n\r\.\,\;\:\!\)\-—\(]|\b(?:because|as|since|for)\b))"
     )
     if choice_choice:
         return choice_choice
 
+    # 4b. "Option X —" bold/header declaration (e.g. "**Option 2** — description")
+    decl_choice = _last_match(
+        r'\boption\s*[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\s*(?:—|-{1,2})\s'
+    )
+    if decl_choice:
+        return decl_choice
+
     # 5. "Option X is best/most attractive" style conclusions
     option_is_choice = _last_match(
         r'\boption\s*[\(\[]?\s*([a-z0-9]+)\s*[\)\]]?\s+(?:is|seems|looks|appears|has)\s+'
-        r'(?:the\s+)?(?:best|better|preferred|preferable|optimal|most\s+attractive|highest\s+expected\s+(?:utility|value))\b'
+        r'(?:the\s+)?(?:best|better|preferred|preferable|optimal|(?:most|more)\s+attractive|highest\s+expected\s+(?:utility|value))\b'
     )
     if option_is_choice:
         return option_is_choice
@@ -427,6 +436,8 @@ def load_situations(val_csv, num_situations, filter_bucket_label=None):
         if bucket_label is None and linear_best_option_numbers and cara001_best_option_numbers:
             if linear_best_option_numbers == cara001_best_option_numbers:
                 bucket_label = "both"
+            else:
+                bucket_label = "lin_only"
 
         options = {}
         best_cara_indices = set()
