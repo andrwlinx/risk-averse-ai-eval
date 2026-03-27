@@ -43,15 +43,20 @@ class SteeringHook:
         self.handle = None
 
     def __call__(self, module, input, output):
-        """Add steering vector to all positions in the sequence."""
+        """Add steering vector to the last token position only.
+
+        During prefill: seq_len = prompt_length, modify only position [-1].
+        During autoregressive decode: seq_len = 1, position [-1] = the only token.
+        This matches the ICV extraction point (pre-answer = last token).
+        """
         if isinstance(output, tuple):
-            hidden_states = output[0]
-            # Add steering vector to all positions
-            # Shape: hidden_states is (batch, seq_len, hidden_size)
-            hidden_states = hidden_states + self.alpha * self.steering_vector.to(hidden_states.device)
+            hidden_states = output[0].clone()
+            hidden_states[:, -1, :] += self.alpha * self.steering_vector.to(hidden_states.device)
             return (hidden_states,) + output[1:]
         else:
-            return output + self.alpha * self.steering_vector.to(output.device)
+            modified = output.clone()
+            modified[:, -1, :] += self.alpha * self.steering_vector.to(modified.device)
+            return modified
 
     def register(self, layer_module):
         """Register this hook on a layer module."""
