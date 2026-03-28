@@ -1,0 +1,51 @@
+{
+  "note": "Reconstructed from stdout log — per-situation details not available. Re-run to get full output.",
+  "sweep_config": {
+    "base_model": "Qwen/Qwen3-1.7B",
+    "model_path": null,
+    "steering_path": "quick_test_sv.pt",
+    "val_csv": "data/2026_01_29_new_val_set_probabilities_add_to_100.csv",
+    "num_situations": 50,
+    "filter_bucket_label": "lin_only",
+    "temperature": 0.0,
+    "layer_candidates": [14],
+    "alphas": [0.0, 1.0, 3.0],
+    "total_sweep_time_seconds": 2700
+  },
+  "baseline_cooperate_rate": 0.355,
+  "baseline_linear_rate": 0.645,
+  "baseline_cara_rate": 0.323,
+  "baseline_parse_rate": 0.939,
+  "results": [
+    {
+      "layer_label": "14",
+      "layer": 14,
+      "alpha": 0.0,
+      "safe_acc": 0.35,
+      "risky_acc": 0.65,
+      "linear_rate": 0.65,
+      "cooperate_rate": 0.35,
+      "cara_rate": 0.32
+    },
+    {
+      "layer_label": "14",
+      "layer": 14,
+      "alpha": 1.0,
+      "safe_acc": 0.29,
+      "risky_acc": 0.71,
+      "linear_rate": 0.71,
+      "cooperate_rate": 0.29,
+      "cara_rate": 0.26
+    },
+    {
+      "layer_label": "14",
+      "layer": 14,
+      "alpha": 3.0,
+      "safe_acc": 0.22,
+      "risky_acc": 0.78,
+      "linear_rate": 0.75,
+      "cooperate_rate": 0.22,
+      "cara_rate": 0.19
+    }
+  ]
+}

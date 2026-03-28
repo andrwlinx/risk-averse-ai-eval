@@ -107,6 +107,7 @@ def save_sweep_json(config, results, base_ra, output_path):
         "baseline_cooperate_rate": base_ra,
         "results": results,
     }
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
     print(f"Results saved to: {output_path}")

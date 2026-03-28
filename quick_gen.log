@@ -1,0 +1,31 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading training data from data/2026_01_29_lin_only_training_set_CoTs_500_Sonnet_4_5.csv...
+Found 500 paired examples where low_bucket_label == 'lin_only'
+  Averse column: chosen_full, Neutral column: rejected_full
+
+Using 50 pairs for steering vector computation
+Extracting activations from layer 14 at position 'think'
+
+Loading model: Qwen/Qwen3-1.7B...
+Loading checkpoint shards:   0%|                                                                                                  | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████████████████████████████████████████████                                             | 1/2 [00:22<00:22, 22.65s/it]Loading checkpoint shards: 100%|██████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:26<00:00, 11.37s/it]Loading checkpoint shards: 100%|██████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:26<00:00, 13.07s/it]
+Model loaded. 28 layers total, extracting from layer 14
+Computing activation differences:   0%|                                                                                          | 0/50 [00:00<?, ?it/s]Computing activation differences:   2%|█▋                                                                                | 1/50 [00:01<01:03,  1.29s/it]Computing activation differences:   6%|████▉                                                                             | 3/50 [00:01<00:18,  2.49it/s]Computing activation differences:  10%|████████▏                                                                         | 5/50 [00:01<00:10,  4.25it/s]Computing activation differences:  14%|███████████▍                                                                      | 7/50 [00:01<00:07,  5.83it/s]Computing activation differences:  18%|██████████████▊                                                                   | 9/50 [00:01<00:05,  7.20it/s]Computing activation differences:  22%|█████████████████▊                                                               | 11/50 [00:02<00:04,  8.35it/s]Computing activation differences:  26%|█████████████████████                                                            | 13/50 [00:02<00:04,  9.23it/s]Computing activation differences:  30%|████████████████████████▎                                                        | 15/50 [00:02<00:03,  9.97it/s]Computing activation differences:  34%|███████████████████████████▌                                                     | 17/50 [00:02<00:03, 10.42it/s]Computing activation differences:  38%|██████████████████████████████▊                                                  | 19/50 [00:02<00:02, 10.69it/s]Computing activation differences:  42%|██████████████████████████████████                                               | 21/50 [00:02<00:02, 10.91it/s]Computing activation differences:  46%|█████████████████████████████████████▎                                           | 23/50 [00:03<00:02, 11.33it/s]Computing activation differences:  50%|████████████████████████████████████████▌                                        | 25/50 [00:03<00:02, 11.96it/s]Computing activation differences:  54%|███████████████████████████████████████████▋                                     | 27/50 [00:03<00:02, 11.29it/s]Computing activation differences:  58%|██████████████████████████████████████████████▉                                  | 29/50 [00:03<00:01, 11.92it/s]Computing activation differences:  62%|██████████████████████████████████████████████████▏                              | 31/50 [00:03<00:01, 12.45it/s]Computing activation differences:  66%|█████████████████████████████████████████████████████▍                           | 33/50 [00:03<00:01, 12.80it/s]Computing activation differences:  70%|████████████████████████████████████████████████████████▋                        | 35/50 [00:04<00:01, 12.98it/s]Computing activation differences:  74%|███████████████████████████████████████████████████████████▉                     | 37/50 [00:04<00:00, 13.15it/s]Computing activation differences:  78%|███████████████████████████████████████████████████████████████▏                 | 39/50 [00:04<00:00, 13.21it/s]Computing activation differences:  82%|██████████████████████████████████████████████████████████████████▍              | 41/50 [00:04<00:00, 13.27it/s]Computing activation differences:  86%|█████████████████████████████████████████████████████████████████████▋           | 43/50 [00:04<00:00, 13.26it/s]Computing activation differences:  90%|████████████████████████████████████████████████████████████████████████▉        | 45/50 [00:04<00:00, 13.34it/s]Computing activation differences:  94%|████████████████████████████████████████████████████████████████████████████▏    | 47/50 [00:05<00:00, 12.53it/s]Computing activation differences:  98%|███████████████████████████████████████████████████████████████████████████████▍ | 49/50 [00:05<00:00, 12.81it/s]Computing activation differences: 100%|█████████████████████████████████████████████████████████████████████████████████| 50/50 [00:05<00:00,  9.54it/s]
+
+Computed 50 valid differences (skipped 0)
+Outlier filter: kept 47/50 diffs (threshold norm=2.24)
+
+==================================================
+STEERING VECTOR GENERATED
+==================================================
+Output: quick_test_sv.pt
+Shape: torch.Size([2048])
+Layer: 14
+Position: think
+Pairs used: 47
+Vector norm: 1.0000 (normalised; raw was 0.5430)
+Vector mean: -0.000690
+Vector std: 0.0221
+==================================================
+
+To use this vector with evaluate.py, run:
+  python evaluate.py --steering_path quick_test_sv.pt --alpha 1.0
