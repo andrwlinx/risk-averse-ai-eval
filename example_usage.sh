@@ -6,7 +6,8 @@
 
 BASE_MODEL="Qwen/Qwen3-8B"
 STEERING_VECTOR="risk_averse_icv_steering_vector.pt"
-EVAL_LAYER=14
+# eval_layer defaults to n_layers // 2 in evaluate.py if omitted.
+# Set this to the layer saved in your .pt file (printed during generation).
 ALPHAS="-10.0,-5.0,-3.0,-2.0,-1.0,0.0,1.0,2.0,3.0,5.0,10.0"
 
 echo "==================================="
@@ -16,7 +17,7 @@ echo ""
 
 # Step 1: Generate steering vector (if not already done)
 echo "To generate a steering vector, run:"
-echo "  python generate_steering_vector.py --base_model $BASE_MODEL --layer $EVAL_LAYER"
+echo "  python generate_steering_vector.py --base_model $BASE_MODEL"
 echo ""
 
 # Step 2: Evaluate on medium-stakes validation (200 situations)
@@ -27,8 +28,7 @@ python evaluate.py \
     --dataset medium_stakes_validation \
     --num_situations 200 \
     --steering_direction_path "$STEERING_VECTOR" \
-    --alphas "$ALPHAS" \
-    --eval_layer "$EVAL_LAYER"
+    --alphas "$ALPHAS"
 
 echo ""
 
@@ -40,8 +40,7 @@ python evaluate.py \
     --dataset high_stakes_test \
     --num_situations 1000 \
     --steering_direction_path "$STEERING_VECTOR" \
-    --alphas "$ALPHAS" \
-    --eval_layer "$EVAL_LAYER"
+    --alphas "$ALPHAS"
 
 echo ""
 
@@ -53,8 +52,7 @@ python evaluate.py \
     --dataset astronomical_stakes_deployment \
     --num_situations 1000 \
     --steering_direction_path "$STEERING_VECTOR" \
-    --alphas "$ALPHAS" \
-    --eval_layer "$EVAL_LAYER"
+    --alphas "$ALPHAS"
 
 echo ""
 
@@ -66,8 +64,7 @@ python evaluate.py \
     --dataset steals_test \
     --num_situations 1000 \
     --steering_direction_path "$STEERING_VECTOR" \
-    --alphas "$ALPHAS" \
-    --eval_layer "$EVAL_LAYER"
+    --alphas "$ALPHAS"
 
 echo ""
 echo "==================================="

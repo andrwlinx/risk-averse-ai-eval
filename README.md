@@ -14,7 +14,6 @@ The canonical evaluation code, system prompt, datasets, and hyperparameters are 
 ```bash
 python generate_steering_vector.py \
     --base_model Qwen/Qwen3-8B \
-    --layer 14 \
     --output risk_averse_icv_steering_vector.pt
 ```
 
@@ -29,7 +28,7 @@ This builds an ICV steering vector by:
 - **System prompt**: Shared canonical prompt from `risk_averse_prompts.py`
 - **Thinking**: Enabled by default (`--enable_thinking`, matching eval-time context)
 - **Base model**: `Qwen/Qwen3-8B`
-- **Layer**: `n_layers // 2` (18 for Qwen3-8B, matching upstream)
+- **Layer**: `n_layers // 2` (auto-computed at runtime, matching upstream)
 - **ICV method**: PCA (matching upstream; `--icv_method mean` for simple averaging)
 - **Demo max chars**: 1600 (matching upstream)
 - **Seed**: `12345`
@@ -39,7 +38,7 @@ This builds an ICV steering vector by:
 ```
 --training_csv     Path to training CSV (default: March 22 lin-only 600 situations)
 --base_model       Model for activation extraction (default: Qwen/Qwen3-8B)
---layer            Layer to extract from (default: 14)
+--layer            Layer to extract from (default: n_layers // 2)
 --output           Output .pt file path
 --num_demos        Demos per contrast (default: 5)
 --num_contrasts    Number of contrasts to average (default: 100)
@@ -55,32 +54,32 @@ This builds an ICV steering vector by:
 
 ## Evaluating with Steering
 
-Use the upstream `evaluate.py` with `--backend transformers`:
+Use the upstream `evaluate.py` with `--backend transformers`. Set `--eval_layer` to the layer saved in your .pt file (the generate script prints this; if omitted, evaluate.py defaults to `n_layers // 2`):
 
 ```bash
 # Medium-stakes validation (200 situations)
 python evaluate.py --backend transformers \
     --dataset medium_stakes_validation --num_situations 200 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10" --eval_layer 14
+    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
 
 # High-stakes test (1000 situations)
 python evaluate.py --backend transformers \
     --dataset high_stakes_test --num_situations 1000 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10" --eval_layer 14
+    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
 
 # Astronomical-stakes deployment (1000 situations)
 python evaluate.py --backend transformers \
     --dataset astronomical_stakes_deployment --num_situations 1000 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10" --eval_layer 14
+    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
 
 # Steals-only test (1000 situations)
 python evaluate.py --backend transformers \
     --dataset steals_test --num_situations 1000 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10" --eval_layer 14
+    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
 ```
 
 ### Canonical eval hyperparameters (set by Elliott, do not change)

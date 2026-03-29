@@ -220,6 +220,8 @@ def run_evaluation(model, tokenizer, situations, steering_vector,
         template_kwargs = {"tokenize": False, "add_generation_prompt": True}
         if disable_thinking:
             template_kwargs["enable_thinking"] = False
+        else:
+            template_kwargs["enable_thinking"] = True
         text = tokenizer.apply_chat_template(messages, **template_kwargs)
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
@@ -438,10 +440,9 @@ def main():
                   f"Valid range: 0-{num_model_layers - 1}")
             sys.exit(1)
 
-    # Auto-enable disable_thinking for base model evaluation
-    if args.model_path is None and not args.disable_thinking:
-        args.disable_thinking = True
-        print("Note: Auto-enabling --disable_thinking for base model evaluation")
+    # Note: do NOT auto-disable thinking. The steering vector is built with
+    # enable_thinking=True, and the canonical evaluator runs with thinking ON.
+    # Sweep exploration should match that context to produce representative results.
 
     # --- Load steering vector (once) ---
     print(f"Loading steering vector from {args.steering_path}...")
