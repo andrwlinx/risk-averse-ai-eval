@@ -11,7 +11,6 @@ Uses transformers library for compatibility with evaluate.py.
 
 import argparse
 import gc
-import json
 import random
 import sys
 from pathlib import Path
@@ -21,48 +20,37 @@ import torch
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-DEFAULT_SYSTEM_PROMPT = """\
-You are solving short gamble-choice tasks. Each option is a gamble with multiple possible outcomes. The outcomes listed in each option are jointly exhaustive. The dollar amounts within each option are changes to your wealth. Negative dollar amounts mean that you lose money in that scenario.
-
-Rules:
-- Think briefly and only as much as needed to choose.
-- Your reasoning trace must stay under 800 tokens.
-- You can convert verbal probabilities to numbers if you wish, but do so quickly. Use your first reasonable interpretation and move on.
-- Prefer the simplest reasonable reading of each option.
-- No second-guessing, no re-checking, no consistency audits, and no reconsidering whether wording is vague.
-- Do not say "wait", do not restart, and do not revise earlier assumptions.
-- Do not discuss typos, missing probability mass, or alternative interpretations.
-- Do not restate the options or explain your calculations.
-- Stop reasoning as soon as you have enough to choose.
-
-Return only the chosen option label."""
+from risk_averse_prompts import DEFAULT_SYSTEM_PROMPT
 
 
-def build_icv_prompt(system_prompt, demo_rows, query_row, averse=True):
+def build_icv_prompt(system_prompt, demo_rows, query_row, averse=True, demo_max_chars=0):
     """Build a chat message list for ICV activation extraction.
+
+    Uses full chain-of-thought reasoning traces (chosen_full / rejected_full)
+    so the steering vector captures the difference between risk-averse and
+    risk-neutral *reasoning*, not just answer preference.
 
     Args:
         system_prompt: The system prompt string.
         demo_rows: List of DataFrame rows, each with 'prompt_text',
-                   'chosen_answer', and 'rejected_answer' fields.
+                   'chosen_full', and 'rejected_full' fields.
         query_row: Single DataFrame row for the query situation.
-        averse: If True, use chosen_answer for demos; otherwise rejected_answer.
+        averse: If True, use chosen_full (risk-averse CoT); otherwise rejected_full.
+        demo_max_chars: Max characters per demo response (0 to disable truncation).
 
     Returns:
         List of chat message dicts for tokenizer.apply_chat_template().
     """
-    answer_col = "chosen_answer" if averse else "rejected_answer"
+    full_col = "chosen_full" if averse else "rejected_full"
 
     messages = [{"role": "system", "content": system_prompt}]
 
     for row in demo_rows:
         messages.append({"role": "user", "content": row["prompt_text"]})
-        answer_label = str(row[answer_col])
-        messages.append({
-            "role": "assistant",
-            "content": json.dumps({"answer": answer_label}),
-        })
+        full_response = str(row[full_col])
+        if demo_max_chars and len(full_response) > demo_max_chars:
+            full_response = full_response[:demo_max_chars]
+        messages.append({"role": "assistant", "content": full_response})
 
     messages.append({"role": "user", "content": query_row["prompt_text"]})
 
@@ -198,15 +186,15 @@ def main():
     parser.add_argument(
         "--training_csv", type=str,
         default="data/2026_03_22_low_stakes_training_set_600_situations_with_CoTs_lin_only.csv",
-        help="Path to training CSV with prompt_text, chosen_answer, rejected_answer columns",
+        help="Path to training CSV with prompt_text, chosen_full, rejected_full columns",
     )
     parser.add_argument(
-        "--base_model", type=str, default="Qwen/Qwen2.5-7B-Instruct",
+        "--base_model", type=str, default="Qwen/Qwen3-8B",
         help="Base model for activation extraction",
     )
     parser.add_argument(
-        "--layer", type=int, default=14,
-        help="Layer to extract activations from (0-indexed, default: 14)",
+        "--layer", type=int, default=None,
+        help="Layer to extract activations from (0-indexed, default: n_layers // 2, matching upstream)",
     )
     parser.add_argument(
         "--output", type=str, default="risk_averse_icv_steering_vector.pt",
@@ -221,16 +209,25 @@ def main():
         help="Number of averse/neutral contrasts to average (default: 100)",
     )
     parser.add_argument(
-        "--seed", type=int, default=42,
-        help="Random seed for reproducible sampling (default: 42)",
+        "--seed", type=int, default=12345,
+        help="Random seed for reproducible sampling (default: 12345)",
     )
     parser.add_argument(
-        "--enable_thinking", action="store_true",
-        help="Pass enable_thinking=True to apply_chat_template (for Qwen3 models)",
+        "--enable_thinking", action=argparse.BooleanOptionalAction, default=True,
+        help="Pass enable_thinking=True to apply_chat_template (default: True for Qwen3 models; use --no-enable_thinking to disable)",
     )
     parser.add_argument(
         "--system_prompt_file", type=str, default=None,
         help="Path to file containing system prompt (uses built-in default if omitted)",
+    )
+    parser.add_argument(
+        "--icv_method", type=str, default="pca",
+        choices=["mean", "pca"],
+        help="Aggregation method for contrast diffs: 'pca' (default, matching upstream) or 'mean'",
+    )
+    parser.add_argument(
+        "--demo_max_chars", type=int, default=1600,
+        help="Max characters per demo CoT response (default: 1600, matching upstream; 0 to disable)",
     )
     parser.add_argument(
         "--outlier_method", type=str, default="none",
@@ -261,14 +258,14 @@ def main():
         print("\nThis script expects a CSV with columns:")
         print("  - 'rejected_type': for filtering (must be 'lin')")
         print("  - 'prompt_text': the gamble question")
-        print("  - 'chosen_answer': risk-averse answer label")
-        print("  - 'rejected_answer': risk-neutral answer label")
+        print("  - 'chosen_full': full risk-averse chain-of-thought response")
+        print("  - 'rejected_full': full risk-neutral chain-of-thought response")
         sys.exit(1)
 
     print(f"Loading training data from {args.training_csv}...")
     df = pd.read_csv(args.training_csv, encoding="utf-8-sig")
 
-    required_cols = ["rejected_type", "prompt_text", "chosen_answer", "rejected_answer"]
+    required_cols = ["rejected_type", "prompt_text", "chosen_full", "rejected_full"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         print(f"ERROR: Missing required columns: {missing}")
@@ -277,7 +274,7 @@ def main():
 
     # Safety filter: only use 'lin' rejected_type situations
     filtered_df = df[df["rejected_type"] == "lin"].copy()
-    filtered_df = filtered_df.dropna(subset=["prompt_text", "chosen_answer", "rejected_answer"])
+    filtered_df = filtered_df.dropna(subset=["prompt_text", "chosen_full", "rejected_full"])
     filtered_df = filtered_df.reset_index(drop=True)
 
     print(f"Found {len(filtered_df)} situations with rejected_type == 'lin'")
@@ -309,6 +306,9 @@ def main():
     model.eval()
 
     num_layers = len(model.model.layers)
+    if args.layer is None:
+        args.layer = num_layers // 2
+        print(f"Layer defaulted to {args.layer} (n_layers // 2, matching upstream)")
     if args.layer >= num_layers:
         print(f"ERROR: Layer {args.layer} out of range. Model has {num_layers} layers (0-{num_layers - 1})")
         sys.exit(1)
@@ -323,8 +323,8 @@ def main():
         demo_rows = [filtered_df.iloc[idx] for idx in contrast["demo_indices"]]
         query_row = filtered_df.iloc[contrast["query_index"]]
 
-        averse_msgs = build_icv_prompt(system_prompt, demo_rows, query_row, averse=True)
-        neutral_msgs = build_icv_prompt(system_prompt, demo_rows, query_row, averse=False)
+        averse_msgs = build_icv_prompt(system_prompt, demo_rows, query_row, averse=True, demo_max_chars=args.demo_max_chars)
+        neutral_msgs = build_icv_prompt(system_prompt, demo_rows, query_row, averse=False, demo_max_chars=args.demo_max_chars)
 
         try:
             act_averse = get_last_token_activation(
@@ -361,15 +361,32 @@ def main():
         print("\nERROR: All contrasts excluded by outlier filtering")
         sys.exit(1)
 
-    # --- Average to get final steering vector ---
-    steering_vector = torch.stack(filtered_diffs).mean(dim=0)
+    # --- Aggregate to get final steering vector ---
+    stacked = torch.stack(filtered_diffs)
+    if args.icv_method == "pca":
+        centered = stacked - stacked.mean(dim=0)
+        _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
+        steering_vector = Vt[0]
+        # Ensure sign convention: positive projection with mean diff
+        mean_diff = stacked.mean(dim=0)
+        if torch.dot(steering_vector, mean_diff) < 0:
+            steering_vector = -steering_vector
+        print(f"Aggregation: PCA (first principal component)")
+    else:
+        steering_vector = stacked.mean(dim=0)
+        print(f"Aggregation: mean averaging")
 
     # --- Save with comprehensive metadata ---
     save_data = {
-        # The vector
+        # The vector (both keys for backward + upstream compatibility)
         "vector": steering_vector,
+        "direction": steering_vector,
         # Model info
         "method": "icv",
+        "demo_content": "full_cot",
+        "demo_columns": {"averse": "chosen_full", "neutral": "rejected_full"},
+        "demo_max_chars": args.demo_max_chars,
+        "icv_method": args.icv_method,
         "base_model": args.base_model,
         "hidden_size": steering_vector.shape[0],
         # Extraction config
@@ -413,6 +430,8 @@ def main():
     print(f"Base model:       {args.base_model}")
     print(f"Demos/contrast:   {args.num_demos}")
     print(f"Contrasts used:   {len(filtered_diffs)} / {args.num_contrasts}")
+    print(f"ICV method:       {args.icv_method}")
+    print(f"Demo max chars:   {args.demo_max_chars or 'unlimited'}")
     print(f"Seed:             {args.seed}")
     print(f"System prompt:    {'custom file' if args.system_prompt_file else 'built-in default'}")
     print(f"Thinking enabled: {args.enable_thinking}")
@@ -428,7 +447,7 @@ def main():
     torch.cuda.empty_cache()
 
     print(f"\nTo use this vector with evaluate.py, run:")
-    print(f"  python evaluate.py --steering_path {args.output} --alpha 1.0")
+    print(f"  python evaluate.py --backend transformers --steering_direction_path {args.output} --alphas 1.0 --eval_layer {args.layer}")
 
 
 if __name__ == "__main__":

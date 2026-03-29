@@ -1,96 +1,75 @@
 #!/bin/bash
-# Example usage script for risk-averse AI evaluation
+# Example usage script for risk-averse AI evaluation (steering vectors)
 #
-# This script shows how to evaluate a fine-tuned model on all three datasets.
-# Modify the MODEL_PATH and BASE_MODEL variables for your setup.
+# Uses the upstream evaluate.py with --backend transformers for steering.
+# Modify the variables below for your setup.
 
-MODEL_PATH="/path/to/your/model/adapter"  # CHANGE THIS
-BASE_MODEL="Qwen/Qwen3-8B"                # CHANGE THIS if needed
+BASE_MODEL="Qwen/Qwen3-8B"
+STEERING_VECTOR="risk_averse_icv_steering_vector.pt"
+EVAL_LAYER=14
+ALPHAS="-10.0,-5.0,-3.0,-2.0,-1.0,0.0,1.0,2.0,3.0,5.0,10.0"
 
 echo "==================================="
-echo "Risk-Averse AI Evaluation Examples"
+echo "Risk-Averse Steering Evaluation"
 echo "==================================="
 echo ""
 
-# Example 1: OOD Validation (Primary Evaluation)
-echo "1. Evaluating on OOD validation set (medium stakes)..."
+# Step 1: Generate steering vector (if not already done)
+echo "To generate a steering vector, run:"
+echo "  python generate_steering_vector.py --base_model $BASE_MODEL --layer $EVAL_LAYER"
+echo ""
+
+# Step 2: Evaluate on medium-stakes validation (200 situations)
+echo "1. Evaluating on medium-stakes validation..."
 python evaluate.py \
-    --model_path "$MODEL_PATH" \
+    --backend transformers \
     --base_model "$BASE_MODEL" \
-    --val_csv data/2026_01_29_new_val_set_probabilities_add_to_100.csv \
-    --num_situations 50 \
-    --temperature 0 \
-    --output results_ood_val.json
+    --dataset medium_stakes_validation \
+    --num_situations 200 \
+    --steering_direction_path "$STEERING_VECTOR" \
+    --alphas "$ALPHAS" \
+    --eval_layer "$EVAL_LAYER"
 
 echo ""
-echo "Results saved to: results_ood_val.json"
-echo ""
 
-# Example 2: In-Distribution Validation
-echo "2. Evaluating on in-distribution validation set..."
+# Step 3: Evaluate on high-stakes test (1000 situations)
+echo "2. Evaluating on high-stakes test..."
 python evaluate.py \
-    --model_path "$MODEL_PATH" \
+    --backend transformers \
     --base_model "$BASE_MODEL" \
-    --val_csv data/in_distribution_val_set.csv \
-    --num_situations 50 \
-    --temperature 0 \
-    --output results_indist_val.json
+    --dataset high_stakes_test \
+    --num_situations 1000 \
+    --steering_direction_path "$STEERING_VECTOR" \
+    --alphas "$ALPHAS" \
+    --eval_layer "$EVAL_LAYER"
 
 echo ""
-echo "Results saved to: results_indist_val.json"
-echo ""
 
-# Example 3: Training Set (Overfitting Check)
-echo "3. Evaluating on training set (overfitting check)..."
+# Step 4: Evaluate on astronomical-stakes deployment (1000 situations)
+echo "3. Evaluating on astronomical-stakes deployment..."
 python evaluate.py \
-    --model_path "$MODEL_PATH" \
+    --backend transformers \
     --base_model "$BASE_MODEL" \
-    --val_csv data/training_eval_set.csv \
-    --num_situations 50 \
-    --temperature 0 \
-    --output results_train.json
+    --dataset astronomical_stakes_deployment \
+    --num_situations 1000 \
+    --steering_direction_path "$STEERING_VECTOR" \
+    --alphas "$ALPHAS" \
+    --eval_layer "$EVAL_LAYER"
 
 echo ""
-echo "Results saved to: results_train.json"
-echo ""
 
-# Summary
+# Step 5: Evaluate on steals-only test (1000 situations)
+echo "4. Evaluating on steals-only test..."
+python evaluate.py \
+    --backend transformers \
+    --base_model "$BASE_MODEL" \
+    --dataset steals_test \
+    --num_situations 1000 \
+    --steering_direction_path "$STEERING_VECTOR" \
+    --alphas "$ALPHAS" \
+    --eval_layer "$EVAL_LAYER"
+
+echo ""
 echo "==================================="
 echo "Evaluation Complete!"
 echo "==================================="
-echo ""
-echo "View results with:"
-echo "  cat results_ood_val.json | python -m json.tool | head -30"
-echo ""
-echo "Quick summary:"
-python -c "
-import json
-import sys
-
-files = ['results_ood_val.json', 'results_indist_val.json', 'results_train.json']
-labels = ['OOD Validation', 'In-Dist Validation', 'Training Set']
-
-print('')
-print('Dataset                 | CARA Rate | Parse Rate | Cooperate% | Rebel%  | Steal%')
-print('-' * 90)
-
-for fname, label in zip(files, labels):
-    try:
-        with open(fname) as f:
-            data = json.load(f)
-            cara = data['metrics']['best_cara_rate'] * 100
-            parse = data['metrics']['parse_rate'] * 100
-            coop = data['metrics']['cooperate_rate'] * 100
-            rebel = data['metrics'].get('rebel_rate', 0) * 100
-            steal = data['metrics'].get('steal_rate', 0) * 100
-            print(f'{label:23} | {cara:5.1f}%    | {parse:6.1f}%    | {coop:6.1f}%    | {rebel:5.1f}% | {steal:5.1f}%')
-    except FileNotFoundError:
-        print(f'{label:23} | ERROR: File not found')
-    except Exception as e:
-        print(f'{label:23} | ERROR: {e}')
-
-print('')
-"
-
-echo ""
-echo "Done!"
