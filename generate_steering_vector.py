@@ -2,9 +2,9 @@
 """
 Generate ICV (In-Context Vector) steering vectors for activation engineering.
 
-Builds few-shot chat prompts with risk-averse vs risk-neutral answer demonstrations,
-extracts activations at the pre-answer (last token) position, and averages the
-differences to produce a steering direction.
+Builds few-shot chat prompts with risk-averse vs risk-neutral reasoning demonstrations
+(full chain-of-thought), extracts activations at the pre-answer (last token) position,
+and aggregates the differences (via PCA or mean) to produce a steering direction.
 
 Uses transformers library for compatibility with evaluate.py.
 """
@@ -230,6 +230,10 @@ def main():
         help="Max characters per demo CoT response (default: 1600, matching upstream; 0 to disable)",
     )
     parser.add_argument(
+        "--normalize", action=argparse.BooleanOptionalAction, default=True,
+        help="L2-normalize the steering vector (default: True; makes alpha comparable across methods/models)",
+    )
+    parser.add_argument(
         "--outlier_method", type=str, default="none",
         choices=["none", "norm", "cosine"],
         help="Outlier filtering method for per-contrast diffs (default: none)",
@@ -363,18 +367,29 @@ def main():
 
     # --- Aggregate to get final steering vector ---
     stacked = torch.stack(filtered_diffs)
+    pca_singular_values = None
     if args.icv_method == "pca":
         centered = stacked - stacked.mean(dim=0)
-        _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
+        _, S, Vt = torch.linalg.svd(centered, full_matrices=False)
+        pca_singular_values = S.tolist()
         steering_vector = Vt[0]
         # Ensure sign convention: positive projection with mean diff
         mean_diff = stacked.mean(dim=0)
         if torch.dot(steering_vector, mean_diff) < 0:
             steering_vector = -steering_vector
-        print(f"Aggregation: PCA (first principal component)")
+        variance_explained = (S[0] ** 2) / (S ** 2).sum()
+        print(f"Aggregation: PCA (first principal component, {variance_explained:.1%} variance explained)")
     else:
         steering_vector = stacked.mean(dim=0)
         print(f"Aggregation: mean averaging")
+
+    # --- Optional L2 normalization ---
+    pre_norm = steering_vector.norm().item()
+    if args.normalize:
+        norm = steering_vector.norm()
+        if norm > 1e-8:
+            steering_vector = steering_vector / norm
+            print(f"Normalized to unit length (original norm: {pre_norm:.4f})")
 
     # --- Save with comprehensive metadata ---
     save_data = {
@@ -387,6 +402,8 @@ def main():
         "demo_columns": {"averse": "chosen_full", "neutral": "rejected_full"},
         "demo_max_chars": args.demo_max_chars,
         "icv_method": args.icv_method,
+        "normalized": args.normalize,
+        "pre_normalization_norm": pre_norm,
         "base_model": args.base_model,
         "hidden_size": steering_vector.shape[0],
         # Extraction config
@@ -417,6 +434,7 @@ def main():
         "vector_mean": steering_vector.mean().item(),
         "vector_std": steering_vector.std().item(),
         "per_contrast_norms": [d.norm().item() for d in vector_diffs],
+        "pca_singular_values": pca_singular_values,
     }
 
     torch.save(save_data, args.output)
