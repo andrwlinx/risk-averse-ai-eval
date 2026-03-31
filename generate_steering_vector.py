@@ -226,8 +226,10 @@ def main():
         help="Aggregation method for contrast diffs: 'pca' (default, matching upstream) or 'mean'",
     )
     parser.add_argument(
-        "--demo_max_chars", type=int, default=1600,
-        help="Max characters per demo CoT response (default: 1600, matching upstream; 0 to disable)",
+        "--demo_max_chars", type=int, default=0,
+        help="Max characters per demo CoT response (default: 0 = no truncation). "
+             "Non-zero values risk asymmetric truncation: risk-averse CoTs are typically "
+             "longer than risk-neutral ones, so truncation disproportionately cuts positive demos.",
     )
     parser.add_argument(
         "--normalize", action=argparse.BooleanOptionalAction, default=True,
@@ -297,6 +299,46 @@ def main():
     query_indices = {p["query_index"] for p in plan}
     print(f"  {len(query_indices)} unique query situations (held out from their own demos)")
     print(f"  Seed: {args.seed}")
+
+    # --- Collect situation IDs for provenance ---
+    has_situation_id = "situation_id" in filtered_df.columns
+    sampling_plan_with_ids = None
+    all_sampled_situation_ids = None
+
+    if has_situation_id:
+        sampling_plan_with_ids = []
+        all_sampled_ids = set()
+        for contrast in plan:
+            demo_ids = [str(filtered_df.iloc[idx]["situation_id"]) for idx in contrast["demo_indices"]]
+            query_id = str(filtered_df.iloc[contrast["query_index"]]["situation_id"])
+            sampling_plan_with_ids.append({
+                "demo_indices": contrast["demo_indices"],
+                "demo_situation_ids": demo_ids,
+                "query_index": contrast["query_index"],
+                "query_situation_id": query_id,
+            })
+            all_sampled_ids.update(demo_ids)
+            all_sampled_ids.add(query_id)
+        all_sampled_situation_ids = sorted(all_sampled_ids)
+        print(f"  {len(all_sampled_situation_ids)} unique situation IDs recorded for provenance")
+    else:
+        print("  WARNING: No 'situation_id' column — IDs will not be saved in metadata")
+
+    # --- Truncation asymmetry check ---
+    if args.demo_max_chars > 0:
+        chosen_lens = filtered_df["chosen_full"].astype(str).str.len()
+        rejected_lens = filtered_df["rejected_full"].astype(str).str.len()
+        chosen_truncated = int((chosen_lens > args.demo_max_chars).sum())
+        rejected_truncated = int((rejected_lens > args.demo_max_chars).sum())
+        print(f"\n  WARNING: demo_max_chars={args.demo_max_chars} is enabled.")
+        print(f"  Demos that would be truncated:")
+        print(f"    chosen_full  (risk-averse):  {chosen_truncated} / {len(filtered_df)}")
+        print(f"    rejected_full (risk-neutral): {rejected_truncated} / {len(filtered_df)}")
+        if chosen_truncated > 0 and rejected_truncated == 0:
+            print(f"  *** ASYMMETRIC TRUNCATION: {chosen_truncated} positive demos truncated, "
+                  f"0 negative demos. Consider --demo_max_chars 0 to disable. ***")
+    else:
+        print(f"\n  demo_max_chars=0 (truncation disabled)")
 
     # --- Load model ---
     print(f"\nLoading model: {args.base_model}...")
@@ -435,6 +477,9 @@ def main():
         "vector_std": steering_vector.std().item(),
         "per_contrast_norms": [d.norm().item() for d in vector_diffs],
         "pca_singular_values": pca_singular_values,
+        # Provenance: situation IDs
+        "sampling_plan": sampling_plan_with_ids,
+        "all_sampled_situation_ids": all_sampled_situation_ids,
     }
 
     torch.save(save_data, args.output)

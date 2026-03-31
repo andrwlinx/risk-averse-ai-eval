@@ -30,7 +30,7 @@ This builds an ICV steering vector by:
 - **Base model**: `Qwen/Qwen3-8B`
 - **Layer**: `n_layers // 2` (auto-computed at runtime, matching upstream)
 - **ICV method**: PCA (matching upstream; `--icv_method mean` for simple averaging)
-- **Demo max chars**: 1600 (matching upstream)
+- **Demo max chars**: 0 / disabled (no truncation; avoids asymmetric truncation of risk-averse CoTs)
 - **Seed**: `12345`
 - **Contrasts**: 100 (5 demos each)
 
@@ -44,7 +44,7 @@ This builds an ICV steering vector by:
 --num_contrasts    Number of contrasts to average (default: 100)
 --seed             Random seed (default: 12345)
 --icv_method       Aggregation: pca (default, matching upstream) or mean
---demo_max_chars   Max chars per demo CoT (default: 1600; 0 to disable)
+--demo_max_chars   Max chars per demo CoT (default: 0 = no truncation; non-zero risks asymmetric truncation)
 --enable_thinking  Enable thinking in chat template (default: True)
 --no-enable_thinking  Disable thinking
 --system_prompt_file  Custom system prompt file (default: uses risk_averse_prompts.py)
@@ -54,32 +54,40 @@ This builds an ICV steering vector by:
 
 ## Evaluating with Steering
 
-Use the upstream `evaluate.py` with `--backend transformers`. Set `--eval_layer` to the layer saved in your .pt file (the generate script prints this; if omitted, evaluate.py defaults to `n_layers // 2`):
+Use the upstream `evaluate.py` with `--backend transformers`. **Always** set `--eval_layer` to the layer saved in your .pt file (the generate script prints this). If omitted, evaluate.py falls back to `n_layers // 2`, which will be **wrong** for any non-mid-layer setting.
 
 ```bash
-# Medium-stakes validation (200 situations)
+# PHASE 1: Sweep alphas on medium-stakes validation to SELECT the best alpha.
+# This is the only dataset where a wide alpha sweep is appropriate.
 python evaluate.py --backend transformers \
     --dataset medium_stakes_validation --num_situations 200 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
+    --eval_layer <LAYER> \
     --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
 
-# High-stakes test (1000 situations)
+# PHASE 2: Evaluate held-out sets with the LOCKED alpha from validation.
+# Do NOT sweep alphas on held-out data — use only the single best alpha from Phase 1.
+
+# High-stakes test (1000 situations) — locked alpha from validation
 python evaluate.py --backend transformers \
     --dataset high_stakes_test --num_situations 1000 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
+    --eval_layer <LAYER> \
+    --alphas "<LOCKED_ALPHA>"
 
-# Astronomical-stakes deployment (1000 situations)
+# Astronomical-stakes deployment (1000 situations) — locked alpha from validation
 python evaluate.py --backend transformers \
     --dataset astronomical_stakes_deployment --num_situations 1000 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
+    --eval_layer <LAYER> \
+    --alphas "<LOCKED_ALPHA>"
 
-# Steals-only test (1000 situations)
+# Steals-only test (1000 situations) — locked alpha from validation
 python evaluate.py --backend transformers \
     --dataset steals_test --num_situations 1000 \
     --steering_direction_path risk_averse_icv_steering_vector.pt \
-    --alphas "-10,-5,-3,-2,-1,0,1,2,3,5,10"
+    --eval_layer <LAYER> \
+    --alphas "<LOCKED_ALPHA>"
 ```
 
 ### Canonical eval hyperparameters (set by Elliott, do not change)
