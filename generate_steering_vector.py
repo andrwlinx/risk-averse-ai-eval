@@ -408,7 +408,8 @@ def main():
         sys.exit(1)
 
     # --- Aggregate to get final steering vector ---
-    stacked = torch.stack(filtered_diffs)
+    # Cast to float32 upfront so SVD and dot products work on CUDA
+    stacked = torch.stack(filtered_diffs).float()
     pca_singular_values = None
     if args.icv_method == "pca":
         centered = stacked - stacked.mean(dim=0)
