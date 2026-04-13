@@ -38,6 +38,7 @@ ENV/
 # Results and outputs
 *.json
 !example_results.json
+!steering_results/**/*.json
 results/
 outputs/
 logs/
@@ -47,6 +48,7 @@ logs/
 *.pth
 *.bin
 *.ckpt
+!steering_results/**/*.pt
 checkpoints/
 models/
 adapters/
